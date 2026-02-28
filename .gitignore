@@ -1,0 +1,13 @@
+# OS
+.DS_Store
+.DS_Store?
+._*
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Environment
+.env
+.env.local
