@@ -1,15 +1,15 @@
 from langgraph.graph import StateGraph, END
 from .state import BankChatState
-from .nodes import detect_intent, route_to_agent, handle_fallback
+from .nodes import detect_intent, route_to_agent, account_agent, transfer_agent, support_agent, handle_fallback
 
 def create_graph():
     graph = StateGraph(BankChatState)
 
-    # Noeuds
+    # Nodes — each has its own specialized system prompt
     graph.add_node("detect_intent",  detect_intent)
-    graph.add_node("account_agent",  handle_fallback)  # à remplacer
-    graph.add_node("transfer_agent", handle_fallback)  # à remplacer
-    graph.add_node("support_agent",  handle_fallback)  # à remplacer
+    graph.add_node("account_agent",  account_agent)
+    graph.add_node("transfer_agent", transfer_agent)
+    graph.add_node("support_agent",  support_agent)
     graph.add_node("fallback",       handle_fallback)
 
     # Point d'entrée

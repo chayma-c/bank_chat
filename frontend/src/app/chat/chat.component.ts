@@ -100,40 +100,60 @@ export class ChatComponent implements OnInit, AfterViewChecked {
     this.userInput.set('');
     this.sending.set(true);
 
-    // Append user message
+    // Append user message instantly
     this.messages.update(msgs => [...msgs, { role: 'user', content: text }]);
-    // Append loading placeholder
+    // Append empty bot bubble — will be filled token by token
     this.messages.update(msgs => [...msgs, { role: 'assistant', content: '', loading: true }]);
 
-    this.chatService.sendMessage({
-      user_id: this.userId,
+    this.chatService.streamMessage({
+      user_id:    this.userId,
       session_id: this.sessionId(),
-      message: text
+      message:    text
     }).subscribe({
-      next: (res) => {
-        this.sending.set(false);
-        // Replace loading with real response
-        this.messages.update(msgs => {
-          const updated = [...msgs];
-          updated[updated.length - 1] = {
-            role: 'assistant',
-            content: res.response,
-            agent_used: res.agent_used
-          };
-          return updated;
-        });
-        this.loadConversations();
+      next: (evt) => {
+        if (evt.error) {
+          this.messages.update(msgs => {
+            const updated = [...msgs];
+            updated[updated.length - 1] = { role: 'assistant', content: 'An error occurred. Please try again.' };
+            return updated;
+          });
+          this.sending.set(false);
+          return;
+        }
+
+        if (evt.token) {
+          // Append token to the last bubble in real time
+          this.messages.update(msgs => {
+            const updated = [...msgs];
+            const last    = updated[updated.length - 1];
+            updated[updated.length - 1] = {
+              ...last,
+              content: last.content + evt.token,
+              loading: false,
+            };
+            return updated;
+          });
+        }
+
+        if (evt.done) {
+          // Finalize: attach agent badge, stop spinner, refresh sidebar
+          this.messages.update(msgs => {
+            const updated = [...msgs];
+            const last    = updated[updated.length - 1];
+            updated[updated.length - 1] = { ...last, agent_used: evt.agent, loading: false };
+            return updated;
+          });
+          this.sending.set(false);
+          this.loadConversations();
+        }
       },
-      error: (err) => {
-        this.sending.set(false);
+      error: () => {
         this.messages.update(msgs => {
           const updated = [...msgs];
-          updated[updated.length - 1] = {
-            role: 'assistant',
-            content: 'An error occurred. Please try again.',
-          };
+          updated[updated.length - 1] = { role: 'assistant', content: 'Connection error. Please try again.' };
           return updated;
         });
+        this.sending.set(false);
       }
     });
   }
