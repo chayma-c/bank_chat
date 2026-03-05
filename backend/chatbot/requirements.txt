@@ -5,11 +5,18 @@ psycopg2-binary
 langchain
 langchain-core
 langchain-groq
+<<<<<<< HEAD
 langchain-ollama
+=======
+>>>>>>> d4e3960 (Add Keycloak documentation, docker-compose, env examples, and updated README)
 langgraph
 langchain-mcp-adapters
 python-dotenv
 channels
 PyJWT
 cryptography
+<<<<<<< HEAD
 requests
+=======
+requests
+>>>>>>> d4e3960 (Add Keycloak documentation, docker-compose, env examples, and updated README)
