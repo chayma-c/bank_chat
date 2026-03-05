@@ -5,18 +5,11 @@ psycopg2-binary
 langchain
 langchain-core
 langchain-groq
-<<<<<<< HEAD
 langchain-ollama
-=======
->>>>>>> b94ff6d0f0d21d99f26c6c9b81b922409eaaf2e0
 langgraph
 langchain-mcp-adapters
 python-dotenv
 channels
 PyJWT
 cryptography
-<<<<<<< HEAD
 requests
-=======
-requests
->>>>>>> b94ff6d0f0d21d99f26c6c9b81b922409eaaf2e0
