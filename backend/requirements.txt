@@ -9,3 +9,6 @@ langgraph
 langchain-mcp-adapters
 python-dotenv
 channels
+PyJWT
+cryptography
+requests
