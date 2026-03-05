@@ -21,7 +21,7 @@ Access the admin console at **http://localhost:8080/admin** and log in with:
 ## 2) Create Realm
 
 1. Click the realm dropdown in the top-left corner → **"Create realm"**
-2. Set **Realm name** to ` `
+2. Set **Realm name** to `myrealm`
 3. Click **Create**
 
 ---
