@@ -138,8 +138,19 @@ STATIC_URL = 'static/'
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
-# REST Framework
+# ── Keycloak ──────────────────────────────────────────────────────────────────
+KEYCLOAK_URL       = os.getenv('KEYCLOAK_URL',       'http://localhost:8080')
+KEYCLOAK_REALM     = os.getenv('KEYCLOAK_REALM',     'myrealm')
+KEYCLOAK_CLIENT_ID = os.getenv('KEYCLOAK_CLIENT_ID', 'bank_chat')
+
+# ── REST Framework (updated) ────────────────────────��────────────────────────
 REST_FRAMEWORK = {
+    'DEFAULT_AUTHENTICATION_CLASSES': [
+        'chatbot.auth.authentication.KeycloakAuthentication',
+    ],
+    'DEFAULT_PERMISSION_CLASSES': [
+        'rest_framework.permissions.IsAuthenticated',
+    ],
     'DEFAULT_RENDERER_CLASSES': [
         'rest_framework.renderers.JSONRenderer',
     ],

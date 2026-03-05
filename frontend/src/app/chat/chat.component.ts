@@ -1,11 +1,12 @@
 import {
   Component, OnInit, AfterViewChecked,
-  ViewChild, ElementRef, signal, computed
+  ViewChild, ElementRef, signal, computed, inject
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { ChatService, Conversation } from '../services/chat.service';
 import { v4 as uuidv4 } from 'uuid';
+import { KeycloakService } from '../auth/keycloak.service';
 
 interface LocalMessage {
   role: 'user' | 'assistant';
@@ -24,7 +25,8 @@ interface LocalMessage {
 export class ChatComponent implements OnInit, AfterViewChecked {
   @ViewChild('messagesEnd') private messagesEnd!: ElementRef;
 
-  readonly userId = 'user-demo';
+  private keycloak = inject(KeycloakService);
+  readonly userId = this.keycloak.userId;
 
   sessionId     = signal<string>(uuidv4());
   messages      = signal<LocalMessage[]>([]);
