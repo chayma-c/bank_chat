@@ -1,51 +1,70 @@
-# Bank Chat — Global Setup (Frontend + Backend)
+# 🏦 BankChat — AI-Powered Banking Assistant
 
-This repository contains:
-- `frontend/`: Angular 21 app
-- `backend/`: Django 6 project
+An intelligent banking chatbot built with **Angular 21**, **Django 6**, **LangGraph** multi-agent orchestration, and **Keycloak** authentication.
 
-## 1) Prerequisites
+## Architecture
 
-Install these tools first:
-- **Node.js** (LTS recommended) and **npm**
-- **Python** 3.12+ (recommended for Django 6)
-- (Optional but recommended) **Git**
-
-Check versions:
-
-```powershell
-node -v
-npm -v
-python --version
+```
+┌─────────────┐     JWT      ┌─────────────┐     LangGraph     ┌─────────────┐
+│   Angular    │ ──Bearer──▶  │   Django     │ ───────────────▶  │  Groq LLM   │
+│  (frontend)  │ ◀──JSON───  │  (backend)   │ ◀───────────────  │  (LLaMA 3)  │
+└──────┬───────┘              └──────┬───────┘                   └─────────────┘
+       │                             │
+       │  OAuth2/OIDC                │  JWT validation
+       ▼                             ▼
+┌─────────────┐              ┌─────────────┐
+│  Keycloak   │              │ PostgreSQL   │
+│   (auth)    │              │   (data)     │
+└─────────────┘              └─────────────┘
 ```
 
-## 2) Backend setup (Django)
+## Prerequisites
 
-From the project root:
+| Tool | Version | Check |
+|------|---------|-------|
+| Node.js | LTS (20+) | `node -v` |
+| npm | 10+ | `npm -v` |
+| Python | 3.12+ | `python --version` |
+| Docker | 20+ | `docker --version` |
+| PostgreSQL | 14+ | `psql --version` |
+
+## Quick Start
+
+### 1) Start Keycloak
+
+```powershell
+docker compose up -d
+```
+
+Then follow [docs/keycloak-setup.md](docs/keycloak-setup.md) to configure the realm, client, and test user.
+
+### 2) Backend
 
 ```powershell
 cd backend
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install --upgrade pip
-pip install Django==6.0.2
+pip install -r chatbot/requirements.txt
+```
+
+Create a `.env` file from the template:
+
+```powershell
+cp .env.example .env
+# Edit .env with your values (DB password, GROQ_API_KEY, etc.)
+```
+
+Run migrations and start:
+
+```powershell
 python manage.py migrate
 python manage.py runserver
 ```
 
-Backend runs on:
-- `http://127.0.0.1:8000/`
-- Admin: `http://127.0.0.1:8000/admin/`
+Backend runs on `http://localhost:8000/`
 
-> If needed, create an admin user:
-
-```powershell
-python manage.py createsuperuser
-```
-
-## 3) Frontend setup (Angular)
-
-Open a new terminal, from project root:
+### 3) Frontend
 
 ```powershell
 cd frontend
@@ -53,35 +72,114 @@ npm install
 npm start
 ```
 
-Frontend runs on:
-- `http://localhost:4200/`
+Frontend runs on `http://localhost:4200/`
 
-## 4) Run both services together
+### 4) Login
 
-Use 2 terminals:
-- Terminal 1: backend (`python manage.py runserver` in `backend/` with venv activated)
-- Terminal 2: frontend (`npm start` in `frontend/`)
+Open `http://localhost:4200` — you'll be redirected to Keycloak.
+Login with the test user you created (e.g. `testuser` / `test1234`).
 
-## 5) Project scripts
+## Project Structure
 
-### Frontend (`frontend/package.json`)
+```
+bank_chat/
+├── docker-compose.yml          # Keycloak container
+├── docs/
+│   └── keycloak-setup.md       # Auth setup guide
+├── backend/
+│   ├── .env.example            # Environment template
+│   ├── config/
+│   │   ├── settings.py         # Django settings (incl. Keycloak config)
+│   │   ├── urls.py
+│   │   └── wsgi.py
+│   ├── chatbot/
+│   │   ├── auth/               # Keycloak JWT authentication
+│   │   │   ├── authentication.py
+│   │   │   └── keycloak_client.py
+│   │   ├── graph/              # LangGraph multi-agent orchestration
+│   │   │   ├── state.py
+│   │   │   ├── nodes.py
+│   │   │   └── orchestrator.py
+│   │   ├── models.py
+│   │   ├── serializers.py
+│   │   ├── views.py
+│   │   ├── urls.py
+│   │   └── requirements.txt
+│   └── manage.py
+├── frontend/
+│   └── src/
+│       ├── environments/       # Keycloak + API config per environment
+│       │   ├── environment.ts
+│       │   └── environment.prod.ts
+│       ├── app/
+│       │   ├── auth/           # Keycloak integration
+│       │   │   ├── keycloak.service.ts
+│       │   │   ├── auth.interceptor.ts
+│       │   │   └── auth.guard.ts
+│       │   ├── services/
+│       │   │   └── chat.service.ts
+│       │   ├── chat/
+│       │   │   ├── chat.component.ts
+│       │   │   ├── chat.component.html
+│       │   │   └── chat.component.css
+│       │   ├── app.ts
+│       │   ├── app.config.ts
+│       │   └── app.routes.ts
+│       └── main.ts
+└── README.md
+```
+
+## Running All Services
+
+You need 3 terminals:
+
+| Terminal | Command | Service |
+|----------|---------|---------|
+| 1 | `docker compose up -d` | Keycloak (http://localhost:8080) |
+| 2 | `cd backend && python manage.py runserver` | Django API (http://localhost:8000) |
+| 3 | `cd frontend && npm start` | Angular app (http://localhost:4200) |
+
+## Environment Variables
+
+### Backend (`backend/.env`)
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `DJANGO_SECRET_KEY` | Django secret key | (insecure default) |
+| `DEBUG` | Debug mode | `True` |
+| `DB_NAME` | PostgreSQL database name | `bank_chat` |
+| `DB_USER` | PostgreSQL user | `postgres` |
+| `DB_PASSWORD` | PostgreSQL password | (empty) |
+| `DB_HOST` | PostgreSQL host | `localhost` |
+| `DB_PORT` | PostgreSQL port | `5432` |
+| `GROQ_API_KEY` | Groq API key for LLM | (required) |
+| `KEYCLOAK_URL` | Keycloak server URL | `http://localhost:8080` |
+| `KEYCLOAK_REALM` | Keycloak realm name | `myrealm` |
+| `KEYCLOAK_CLIENT_ID` | Keycloak client ID | `bank_chat` |
+
+### Frontend (`frontend/src/environments/environment.ts`)
+
+| Setting | Description | Default |
+|---------|-------------|---------|
+| `apiBaseUrl` | Backend API URL | `http://localhost:8000/api/v1/chatbot` |
+| `keycloak.url` | Keycloak URL | `http://localhost:8080` |
+| `keycloak.realm` | Realm name | `myrealm` |
+| `keycloak.clientId` | Client ID | `bank_chat` |
+
+## Scripts
+
+### Frontend
 
 ```powershell
-npm start      # ng serve
-npm run build  # production build
-npm test       # unit tests
+npm start      # Dev server (http://localhost:4200)
+npm run build  # Production build
+npm test       # Unit tests
 ```
 
 ### Backend
 
 ```powershell
-python manage.py runserver
-python manage.py migrate
-python manage.py test
+python manage.py runserver   # Dev server
+python manage.py migrate     # Apply migrations
+python manage.py test        # Run tests
 ```
-
-## 6) Current status
-
-- Backend is currently a fresh Django project (SQLite, admin route only).
-- Frontend is currently a fresh Angular project scaffold.
-- API integration between frontend and backend is not yet configured.
