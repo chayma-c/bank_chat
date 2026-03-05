@@ -4,7 +4,7 @@ import {
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
-import { ChatService, Conversation, Message } from '../services/chat.service';
+import { ChatService, Conversation } from '../services/chat.service';
 import { v4 as uuidv4 } from 'uuid';
 
 interface LocalMessage {
@@ -26,11 +26,11 @@ export class ChatComponent implements OnInit, AfterViewChecked {
 
   readonly userId = 'user-demo';
 
-  sessionId = signal<string>(uuidv4());
-  messages  = signal<LocalMessage[]>([]);
-  userInput = signal<string>('');
-  sending   = signal<boolean>(false);
-  sidebarOpen = signal<boolean>(true);
+  sessionId     = signal<string>(uuidv4());
+  messages      = signal<LocalMessage[]>([]);
+  userInput     = signal<string>('');
+  sending       = signal<boolean>(false);
+  sidebarOpen   = signal<boolean>(true);
   conversations = signal<Conversation[]>([]);
   activeSession = signal<string>('');
 
@@ -100,57 +100,42 @@ export class ChatComponent implements OnInit, AfterViewChecked {
     this.userInput.set('');
     this.sending.set(true);
 
-    // Append user message instantly
+    // 1. Afficher le message utilisateur immédiatement
     this.messages.update(msgs => [...msgs, { role: 'user', content: text }]);
-    // Append empty bot bubble — will be filled token by token
+
+    // 2. Afficher une bulle vide avec loading pendant l'attente
     this.messages.update(msgs => [...msgs, { role: 'assistant', content: '', loading: true }]);
 
-    this.chatService.streamMessage({
+    // 3. Appel bloquant simple
+    this.chatService.sendMessage({
       user_id:    this.userId,
       session_id: this.sessionId(),
       message:    text
     }).subscribe({
-      next: (evt) => {
-        if (evt.error) {
-          this.messages.update(msgs => {
-            const updated = [...msgs];
-            updated[updated.length - 1] = { role: 'assistant', content: 'An error occurred. Please try again.' };
-            return updated;
-          });
-          this.sending.set(false);
-          return;
-        }
-
-        if (evt.token) {
-          // Append token to the last bubble in real time
-          this.messages.update(msgs => {
-            const updated = [...msgs];
-            const last    = updated[updated.length - 1];
-            updated[updated.length - 1] = {
-              ...last,
-              content: last.content + evt.token,
-              loading: false,
-            };
-            return updated;
-          });
-        }
-
-        if (evt.done) {
-          // Finalize: attach agent badge, stop spinner, refresh sidebar
-          this.messages.update(msgs => {
-            const updated = [...msgs];
-            const last    = updated[updated.length - 1];
-            updated[updated.length - 1] = { ...last, agent_used: evt.agent, loading: false };
-            return updated;
-          });
-          this.sending.set(false);
-          this.loadConversations();
-        }
-      },
-      error: () => {
+      next: (response) => {
+        // 4. Remplacer la bulle loading par la vraie réponse
         this.messages.update(msgs => {
           const updated = [...msgs];
-          updated[updated.length - 1] = { role: 'assistant', content: 'Connection error. Please try again.' };
+          updated[updated.length - 1] = {
+            role:      'assistant',
+            content:   response.response,
+            agent_used: response.agent_used,
+            loading:   false,
+          };
+          return updated;
+        });
+        this.sending.set(false);
+        this.loadConversations();
+      },
+      error: () => {
+        // 5. En cas d'erreur, remplacer la bulle par un message d'erreur
+        this.messages.update(msgs => {
+          const updated = [...msgs];
+          updated[updated.length - 1] = {
+            role:    'assistant',
+            content: 'Une erreur est survenue. Veuillez réessayer.',
+            loading: false,
+          };
           return updated;
         });
         this.sending.set(false);
@@ -166,14 +151,14 @@ export class ChatComponent implements OnInit, AfterViewChecked {
   }
 
   getPreview(conv: Conversation): string {
-    if (!conv.messages?.length) return 'New conversation';
+    if (!conv.messages?.length) return 'Nouvelle conversation';
     const last = conv.messages[conv.messages.length - 1];
     return last.content.length > 40 ? last.content.slice(0, 40) + '…' : last.content;
   }
 
   formatDate(dateStr: string): string {
     const d = new Date(dateStr);
-    return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' });
+    return d.toLocaleDateString('fr-FR', { day: '2-digit', month: 'short' });
   }
 
   toggleSidebar(): void {
