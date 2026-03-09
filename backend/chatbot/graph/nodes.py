@@ -1,12 +1,57 @@
 import os
 from langchain_groq import ChatGroq
+from langchain_ollama import ChatOllama
 from langchain_core.messages import SystemMessage, AIMessage
 from .state import BankChatState
 
-llm = ChatGroq(
-    model="llama-3.3-70b-versatile",
-    api_key=os.getenv("GROQ_API_KEY"),
-)
+# ── Configuration du LLM (Groq ou Ollama) ─────────────────────────
+
+def get_llm():
+    """
+    Initialise le LLM selon la configuration dans .env
+    
+    Variables d'environnement :
+    - LLM_PROVIDER: "groq" (défaut) ou "ollama"
+    - GROQ_API_KEY: clé API Groq (si provider=groq)
+    - GROQ_MODEL: modèle Groq (défaut: llama-3.3-70b-versatile)
+    - OLLAMA_BASE_URL: URL Ollama (défaut: http://localhost:11434)
+    - OLLAMA_MODEL: modèle Ollama (défaut: llama3.2)
+    """
+    provider = os.getenv("LLM_PROVIDER", "groq").lower()
+    
+    if provider == "ollama":
+        # Configuration Ollama (modèle local)
+        base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+        model = os.getenv("OLLAMA_MODEL", "llama3.2")
+        
+        print(f"✅ Using Ollama LLM: {model} at {base_url}")
+        
+        return ChatOllama(
+            base_url=base_url,
+            model=model,
+            temperature=0.7,
+        )
+    else:
+        # Configuration Groq (API cloud) - par défaut
+        api_key = os.getenv("GROQ_API_KEY")
+        model = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+        
+        if not api_key:
+            raise ValueError(
+                "GROQ_API_KEY is required when LLM_PROVIDER=groq. "
+                "Set it in your .env file or switch to LLM_PROVIDER=ollama"
+            )
+        
+        print(f"✅ Using Groq LLM: {model}")
+        
+        return ChatGroq(
+            model=model,
+            api_key=api_key,
+            temperature=0.7,
+        )
+
+# Initialiser le LLM au démarrage
+llm = get_llm()
 
 # ── Specialized system prompts per agent ─────────────────────────────────────
 
