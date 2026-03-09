@@ -105,37 +105,64 @@ export class ChatComponent implements OnInit, AfterViewChecked {
     // 1. Afficher le message utilisateur immédiatement
     this.messages.update(msgs => [...msgs, { role: 'user', content: text }]);
 
-    // 2. Afficher une bulle vide avec loading pendant l'attente
+    // 2. Afficher une bulle vide avec loading pendant le streaming
     this.messages.update(msgs => [...msgs, { role: 'assistant', content: '', loading: true }]);
 
-    // 3. Appel bloquant simple
-    this.chatService.sendMessage({
+    // 3. Appel en streaming SSE
+    this.chatService.streamMessage({
       user_id:    this.userId,
       session_id: this.sessionId(),
       message:    text
     }).subscribe({
-      next: (response) => {
-        // 4. Remplacer la bulle loading par la vraie réponse
-        this.messages.update(msgs => {
-          const updated = [...msgs];
-          updated[updated.length - 1] = {
-            role:      'assistant',
-            content:   response.response,
-            agent_used: response.agent_used,
-            loading:   false,
-          };
-          return updated;
-        });
-        this.sending.set(false);
-        this.loadConversations();
+      next: (evt) => {
+        if (evt.error) {
+          // Erreur reçue du serveur
+          this.messages.update(msgs => {
+            const updated = [...msgs];
+            updated[updated.length - 1] = {
+              role: 'assistant',
+              content: 'Une erreur est survenue. Veuillez réessayer.',
+              loading: false,
+            };
+            return updated;
+          });
+          this.sending.set(false);
+          return;
+        }
+
+        if (evt.token) {
+          // Ajouter chaque token reçu en temps réel
+          this.messages.update(msgs => {
+            const updated = [...msgs];
+            const last    = updated[updated.length - 1];
+            updated[updated.length - 1] = {
+              ...last,
+              content: last.content + evt.token,
+              loading: false,
+            };
+            return updated;
+          });
+        }
+
+        if (evt.done) {
+          // Finaliser : badge agent, arrêter spinner, refresh sidebar
+          this.messages.update(msgs => {
+            const updated = [...msgs];
+            const last    = updated[updated.length - 1];
+            updated[updated.length - 1] = { ...last, agent_used: evt.agent, loading: false };
+            return updated;
+          });
+          this.sending.set(false);
+          this.loadConversations();
+        }
       },
       error: () => {
-        // 5. En cas d'erreur, remplacer la bulle par un message d'erreur
+        // Erreur de connexion ou autre
         this.messages.update(msgs => {
           const updated = [...msgs];
           updated[updated.length - 1] = {
             role:    'assistant',
-            content: 'Une erreur est survenue. Veuillez réessayer.',
+            content: 'Erreur de connexion. Veuillez réessayer.',
             loading: false,
           };
           return updated;

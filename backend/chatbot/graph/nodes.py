@@ -103,3 +103,24 @@ def handle_fallback(state: BankChatState) -> BankChatState:
     return _run_agent(state, "fallback")
 
 
+# ── Streaming helper (used directly by the stream view) ──────────────────────
+
+def stream_agent_response(intent: str, messages: list):
+    """
+    Yields text tokens from the LLM one by one.
+    Used by StreamChatView for real-time streaming.
+    """
+    agent_key = {
+        "account":  "account_agent",
+        "transfer": "transfer_agent",
+        "support":  "support_agent",
+    }.get(intent, "fallback")
+
+    system = SystemMessage(content=SYSTEM_PROMPTS[agent_key])
+    messages_with_system = [system] + list(messages)
+
+    for chunk in llm.stream(messages_with_system):
+        if chunk.content:
+            yield chunk.content, agent_key
+
+
