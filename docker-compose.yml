@@ -1,4 +1,25 @@
 services:
+
+  # ── Base de données PostgreSQL ─────────────────────────────────────────────
+  db:
+    image: postgres:16-alpine
+    container_name: bank_chat_db
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-bank_chat}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgresql}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # ── Keycloak (Auth) ────────────────────────────────────────────────────────
   keycloak:
     image: quay.io/keycloak/keycloak:latest
     container_name: bank_chat_keycloak
@@ -9,7 +30,7 @@ services:
       - ./keycloak/themes/mytheme:/opt/keycloak/themes/mytheme
       - ./keycloak/realm-export.json:/opt/keycloak/data/import/realm-export.json
     ports:
-      - "127.0.0.1:8080:8080"
+      - "8080:8080"
     command: >
       start-dev
       --import-realm
@@ -17,3 +38,42 @@ services:
       --spi-theme--cache-templates=false
       --spi-theme--static-max-age=-1
     restart: unless-stopped
+
+  # ── Chatbot Django ─────────────────────────────────────────────────────────
+  chatbot:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: bank_chat_backend
+    env_file:
+      - backend/.env
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    command: >
+      sh -c "
+        echo '⏳ Waiting for PostgreSQL...' &&
+        while ! nc -z db 5432; do sleep 1; done &&
+        echo '✅ PostgreSQL is ready!' &&
+        python manage.py migrate &&
+        python manage.py runserver 0.0.0.0:8000
+      "
+    restart: unless-stopped
+
+  # ── Frontend Angular ───────────────────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: bank_chat_frontend
+    ports:
+      - "4200:80"
+    depends_on:
+      - chatbot
+      - keycloak
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
