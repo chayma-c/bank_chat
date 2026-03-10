@@ -6,11 +6,6 @@ langchain
 langchain-core
 langchain-groq
 langchain-ollama
-<<<<<<< HEAD
-=======
->>>>>>> d4e3960 (Add Keycloak documentation, docker-compose, env examples, and updated README)
-=======
->>>>>>> 211365e (Add Keycloak documentation, docker-compose, env examples, and updated README)
 langgraph
 langchain-mcp-adapters
 python-dotenv
@@ -18,9 +13,3 @@ channels
 PyJWT
 cryptography
 requests
-<<<<<<< HEAD
-=======
-requests
->>>>>>> d4e3960 (Add Keycloak documentation, docker-compose, env examples, and updated README)
-=======
->>>>>>> 211365e (Add Keycloak documentation, docker-compose, env examples, and updated README)
