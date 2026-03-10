@@ -1,0 +1,348 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+
+*, *::before, *::after { box-sizing: border-box; }
+
+/* ── Page ── */
+body, .login-pf body {
+  font-family: 'Inter', -apple-system, sans-serif;
+  background: #f5f7fa;
+  margin: 0;
+  padding: 0;
+  min-height: 100vh;
+}
+
+/* ── Strip ALL Keycloak container backgrounds/borders ── */
+.login-pf-page,
+#kc-container-wrapper,
+#kc-container,
+#kc-content-wrapper,
+#kc-content,
+#kc-info,
+#kc-info-wrapper,
+.card-pf,
+.login-pf .container,
+div[id^="kc-"] {
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  padding: 0 !important;
+  margin: 0 auto !important;
+}
+
+/* ── Brand header ── */
+#kc-header,
+#kc-header-wrapper {
+  display: block !important;
+  text-align: center !important;
+  font-size: 1.6rem !important;
+  font-weight: 800 !important;
+  color: #2563eb !important;
+  letter-spacing: -0.5px !important;
+  padding: 2rem 0 0.25rem !important;
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+}
+
+#kc-header-wrapper::after {
+  content: "AI Banking Assistant";
+  display: block;
+  font-size: 0.8rem;
+  color: #6b7280;
+  font-weight: 400;
+  margin-bottom: 1.5rem;
+}
+
+/* ── The ONE card wrapping everything ── */
+#kc-form,
+form#kc-form-login,
+form {
+  background: #ffffff !important;
+  border: 1px solid #e5e7eb !important;
+  border-radius: 16px !important;
+  box-shadow: 0 4px 24px rgba(0,0,0,0.07) !important;
+  padding: 2rem 2.25rem !important;
+  max-width: 420px !important;
+  width: 100% !important;
+  margin: 0 auto !important;
+}
+
+/* ── Page title ── */
+#kc-page-title {
+  font-size: 1.1rem !important;
+  font-weight: 700 !important;
+  color: #111827 !important;
+  text-align: center !important;
+  margin: 0 0 1.5rem !important;
+  padding: 0 !important;
+}
+
+/* ── Labels ── */
+label {
+  display: block;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #374151;
+  margin-bottom: 0.35rem;
+}
+
+/* ── Inputs ── */
+input[type="text"],
+input[type="email"],
+input[type="password"] {
+  width: 100% !important;
+  padding: 0.65rem 0.9rem !important;
+  font-size: 0.9rem !important;
+  font-family: 'Inter', sans-serif !important;
+  color: #111827 !important;
+  background: #f9fafb !important;
+  border: 1.5px solid #e5e7eb !important;
+  border-radius: 10px !important;
+  outline: none !important;
+  transition: border-color 0.2s, box-shadow 0.2s !important;
+  appearance: none !important;
+}
+
+input[type="text"]:focus,
+input[type="email"]:focus,
+input[type="password"]:focus {
+  border-color: #2563eb !important;
+  box-shadow: 0 0 0 3px rgba(37,99,235,0.12) !important;
+  background: #fff !important;
+}
+
+input::placeholder { color: #9ca3af; }
+
+/* ── Error state ── */
+input[aria-invalid="true"],
+.has-error input {
+  border-color: #ef4444 !important;
+  background: #fff !important;
+  background-image: none !important;
+  box-shadow: 0 0 0 3px rgba(239,68,68,0.1) !important;
+}
+
+.kc-feedback-text,
+#input-error,
+.help-block {
+  color: #ef4444 !important;
+  font-size: 0.78rem !important;
+  margin-top: 0.3rem !important;
+  display: block !important;
+  background: none !important;
+  background-image: none !important;
+}
+
+.alert-error {
+  background: #fef2f2 !important;
+  background-image: none !important;
+  border: 1px solid #fecaca !important;
+  border-radius: 10px !important;
+  color: #b91c1c !important;
+  padding: 0.75rem 1rem !important;
+  font-size: 0.82rem !important;
+  margin-bottom: 1rem !important;
+}
+
+/* ── Password eye inside input ── */
+.pf-c-input-group {
+  position: relative !important;
+  display: flex !important;
+  align-items: center !important;
+}
+
+.pf-c-input-group input {
+  padding-right: 2.75rem !important;
+}
+
+.pf-c-input-group button,
+button.pf-c-button.pf-m-control {
+  position: absolute !important;
+  right: 0.6rem !important;
+  top: 50% !important;
+  transform: translateY(-50%) !important;
+  background: none !important;
+  border: none !important;
+  padding: 0.25rem !important;
+  cursor: pointer !important;
+  color: #9ca3af !important;
+  display: flex !important;
+  align-items: center !important;
+  z-index: 2 !important;
+  box-shadow: none !important;
+}
+
+.pf-c-input-group button:hover {
+  color: #2563eb !important;
+}
+
+/* ── Remember me + Forgot password row ── */
+#kc-form-options {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  margin: 0.75rem 0 !important;
+  background: none !important;
+  border: none !important;
+  box-shadow: none !important;
+  padding: 0 !important;
+}
+
+#rememberMe,
+.checkbox {
+  display: flex !important;
+  align-items: center !important;
+  gap: 0.4rem !important;
+}
+
+#rememberMe input[type="checkbox"] {
+  width: 15px !important;
+  height: 15px !important;
+  accent-color: #2563eb !important;
+  border: none !important;
+  box-shadow: none !important;
+  background: transparent !important;
+  padding: 0 !important;
+}
+
+#rememberMe label,
+.checkbox label {
+  font-size: 0.82rem !important;
+  font-weight: 400 !important;
+  color: #6b7280 !important;
+  margin: 0 !important;
+}
+
+/* ── Sign In button ── */
+#kc-login,
+input[type="submit"],
+button[type="submit"],
+.btn-primary {
+  width: 100% !important;
+  padding: 0.7rem 1rem !important;
+  background: #2563eb !important;
+  color: #fff !important;
+  font-size: 0.9rem !important;
+  font-weight: 600 !important;
+  font-family: 'Inter', sans-serif !important;
+  border: none !important;
+  border-radius: 10px !important;
+  cursor: pointer !important;
+  margin-top: 0.5rem !important;
+  transition: background 0.15s !important;
+  box-shadow: none !important;
+}
+
+#kc-login:hover,
+input[type="submit"]:hover,
+button[type="submit"]:hover {
+  background: #1d4ed8 !important;
+}
+
+/* ── Links ── */
+a {
+  color: #2563eb !important;
+  font-size: 0.82rem !important;
+  font-weight: 500 !important;
+  text-decoration: none !important;
+}
+a:hover { text-decoration: underline !important; }
+
+/* ── Register link ── */
+/* Strip any wrapper giving a second card look */
+#kc-info {
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  padding: 0 !important;
+  margin: 0 auto !important;
+  max-width: 420px !important;
+  width: 100% !important;
+}
+
+#kc-registration,
+#kc-registration-container {
+  display: block !important;
+  visibility: visible !important;
+  text-align: center !important;
+  font-size: 0.82rem !important;
+  color: #6b7280 !important;
+  margin: 0 auto !important;
+  padding: 1rem 2.25rem 1.5rem !important;
+  background: #fff !important;
+  border: 1px solid #e5e7eb !important;
+  border-top: 1px solid #f3f4f6 !important;
+  border-radius: 0 0 16px 16px !important;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.06) !important;
+  max-width: 420px !important;
+  width: 100% !important;
+}
+
+#kc-registration a {
+  color: #2563eb !important;
+  font-weight: 600 !important;
+}
+
+/* Flatten form bottom so register connects flush */
+form#kc-form-login,
+form {
+  border-bottom-left-radius: 0 !important;
+  border-bottom-right-radius: 0 !important;
+  border-bottom: none !important;
+  margin-bottom: 0 !important;
+}
+
+/* ── Responsive ── */
+@media (max-width: 480px) {
+  form, #kc-registration { padding-left: 1.5rem !important; padding-right: 1.5rem !important; }
+}
+
+/* ── Nuclear strip on ALL outer wrappers causing extra cards ── */
+#kc-content-wrapper,
+#kc-container-wrapper,
+.login-pf-page .container,
+#kc-container {
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  padding: 0 !important;
+  margin: 0 auto !important;
+  max-width: 420px !important;
+  width: 100% !important;
+}
+
+/* Remove any gap between form and register section */
+form + #kc-info,
+form + div {
+  margin-top: 0 !important;
+  padding-top: 0 !important;
+}
+
+/* ── Register link — clean, no box ── */
+#kc-info,
+#kc-info-wrapper,
+#kc-registration,
+#kc-registration-container {
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  border-radius: 0 !important;
+  max-width: 420px !important;
+  margin: 0 auto !important;
+  padding: 0.5rem 0 !important;
+  text-align: right !important;
+}
+
+#kc-registration a {
+  color: #2563eb !important;
+  font-weight: 600 !important;
+  font-size: 0.82rem !important;
+}
+
+/* Restore card full rounded corners */
+form#kc-form-login,
+form {
+  border-bottom-left-radius: 16px !important;
+  border-bottom-right-radius: 16px !important;
+  border-bottom: 1px solid #e5e7eb !important;
+}
