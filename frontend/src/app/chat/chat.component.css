@@ -375,3 +375,123 @@
   text-align: center;
   margin: 0.4rem 0 0;
 }
+
+/* ═══ Sidebar Profile (ChatGPT-style) ═══ */
+.sidebar-profile {
+  position: relative;
+  margin-top: auto;                       /* pushes to bottom of flex sidebar */
+  border-top: 1px solid #1f2937;
+  padding: 0.5rem 0.75rem;
+}
+
+.profile-trigger {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  width: 100%;
+  padding: 0.5rem 0.6rem;
+  background: none;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.15s;
+  text-align: left;
+}
+.profile-trigger:hover {
+  background: #1f2937;
+}
+
+.profile-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: #2563eb;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.8rem;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.profile-info {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+
+.profile-name {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #f9fafb;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.profile-email {
+  font-size: 0.68rem;
+  color: #6b7280;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.profile-dots {
+  color: #6b7280;
+  flex-shrink: 0;
+  transition: color 0.15s;
+}
+.profile-trigger:hover .profile-dots {
+  color: #d1d5db;
+}
+
+/* Popover menu — floats above the profile trigger */
+.profile-menu {
+  position: absolute;
+  bottom: calc(100% + 4px);              /* sits above the trigger */
+  left: 0.75rem;
+  right: 0.75rem;
+  background: #1f2937;
+  border: 1px solid #374151;
+  border-radius: 10px;
+  padding: 4px;
+  box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.3);
+  z-index: 20;
+  animation: menuSlideUp 0.12s ease-out;
+}
+
+@keyframes menuSlideUp {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.profile-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.55rem 0.75rem;
+  background: none;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.82rem;
+  font-weight: 500;
+  color: #d1d5db;
+  transition: background 0.15s, color 0.15s;
+}
+.profile-menu-item:hover {
+  background: #374151;
+  color: #f9fafb;
+}
+
+.profile-menu-item--danger {
+  color: #f87171;
+}
+.profile-menu-item--danger:hover {
+  background: #7f1d1d;
+  color: #fca5a5;
+}

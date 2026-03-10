@@ -1,6 +1,6 @@
 import {
   Component, OnInit, AfterViewChecked,
-  ViewChild, ElementRef, signal, computed, inject
+  ViewChild, ElementRef, signal, computed, inject, HostListener
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
@@ -27,6 +27,9 @@ export class ChatComponent implements OnInit, AfterViewChecked {
 
   private keycloak = inject(KeycloakService);
   readonly userId = this.keycloak.userId;
+  readonly username = this.keycloak.username;
+  readonly userInitial = this.keycloak.userInitial;
+  readonly email = this.keycloak.email;
 
   sessionId     = signal<string>(uuidv4());
   messages      = signal<LocalMessage[]>([]);
@@ -35,6 +38,9 @@ export class ChatComponent implements OnInit, AfterViewChecked {
   sidebarOpen   = signal<boolean>(true);
   conversations = signal<Conversation[]>([]);
   activeSession = signal<string>('');
+
+  /** Controls the visibility of the profile popover menu */
+  profileMenuOpen = signal<boolean>(false);
 
   isNewChat = computed(() => this.messages().length === 0);
 
@@ -46,6 +52,15 @@ export class ChatComponent implements OnInit, AfterViewChecked {
 
   ngAfterViewChecked(): void {
     this.scrollToBottom();
+  }
+
+  /** Close profile menu when clicking anywhere outside */
+  @HostListener('document:click', ['$event'])
+  onDocumentClick(event: MouseEvent): void {
+    const target = event.target as HTMLElement;
+    if (!target.closest('.sidebar-profile')) {
+      this.profileMenuOpen.set(false);
+    }
   }
 
   private scrollToBottom(): void {
@@ -102,13 +117,9 @@ export class ChatComponent implements OnInit, AfterViewChecked {
     this.userInput.set('');
     this.sending.set(true);
 
-    // 1. Afficher le message utilisateur immédiatement
     this.messages.update(msgs => [...msgs, { role: 'user', content: text }]);
-
-    // 2. Afficher une bulle vide avec loading pendant le streaming
     this.messages.update(msgs => [...msgs, { role: 'assistant', content: '', loading: true }]);
 
-    // 3. Appel en streaming SSE
     this.chatService.streamMessage({
       user_id:    this.userId,
       session_id: this.sessionId(),
@@ -116,7 +127,6 @@ export class ChatComponent implements OnInit, AfterViewChecked {
     }).subscribe({
       next: (evt) => {
         if (evt.error) {
-          // Erreur reçue du serveur
           this.messages.update(msgs => {
             const updated = [...msgs];
             updated[updated.length - 1] = {
@@ -131,7 +141,6 @@ export class ChatComponent implements OnInit, AfterViewChecked {
         }
 
         if (evt.token) {
-          // Ajouter chaque token reçu en temps réel
           this.messages.update(msgs => {
             const updated = [...msgs];
             const last    = updated[updated.length - 1];
@@ -145,7 +154,6 @@ export class ChatComponent implements OnInit, AfterViewChecked {
         }
 
         if (evt.done) {
-          // Finaliser : badge agent, arrêter spinner, refresh sidebar
           this.messages.update(msgs => {
             const updated = [...msgs];
             const last    = updated[updated.length - 1];
@@ -157,7 +165,6 @@ export class ChatComponent implements OnInit, AfterViewChecked {
         }
       },
       error: () => {
-        // Erreur de connexion ou autre
         this.messages.update(msgs => {
           const updated = [...msgs];
           updated[updated.length - 1] = {
@@ -196,5 +203,15 @@ export class ChatComponent implements OnInit, AfterViewChecked {
 
   trackBySession(_: number, conv: Conversation): string {
     return conv.session_id;
+  }
+
+  // ── Profile menu ──────────────────────────────────────────────
+
+  toggleProfileMenu(): void {
+    this.profileMenuOpen.update(v => !v);
+  }
+
+  logout(): void {
+    this.keycloak.logout();
   }
 }

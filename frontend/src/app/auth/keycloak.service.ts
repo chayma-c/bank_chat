@@ -46,6 +46,15 @@ export class KeycloakService {
     return KeycloakService.kc.tokenParsed?.['preferred_username'] ?? 'unknown';
   }
 
+  get email(): string {
+    return KeycloakService.kc.tokenParsed?.['email'] ?? '';
+  }
+
+  /** Extracts the first letter of the username for the avatar */
+  get userInitial(): string {
+    return this.username.charAt(0).toUpperCase();
+  }
+
   logout(): void {
     KeycloakService.kc.logout({ redirectUri: window.location.origin + '/' });
   }

@@ -74,10 +74,13 @@ npm start
 
 Frontend runs on `http://localhost:4200/`
 
-### 4) Login
+### 4) Login & Logout
 
-Open `http://localhost:4200` — you'll be redirected to Keycloak.
+**Login:** Open `http://localhost:4200` — you'll be redirected to Keycloak.
 Login with the test user you created (e.g. `testuser` / `test1234`).
+
+**Logout:** Click your profile section at the bottom-left of the sidebar → select **"Log out"**.
+You will be redirected back to the Keycloak sign-in page.
 
 ## Project Structure
 
@@ -112,16 +115,16 @@ bank_chat/
 │       │   ├── environment.ts
 │       │   └── environment.prod.ts
 │       ├── app/
-│       │   ├── auth/           # Keycloak integration
-│       │   │   ├── keycloak.service.ts
+│       │   ├── auth/           # Keycloak integration (login, logout, JWT)
+│       │   │   ├── keycloak.service.ts   ← provides username, email, userInitial, logout()
 │       │   │   ├── auth.interceptor.ts
 │       │   │   └── auth.guard.ts
 │       │   ├── services/
 │       │   │   └── chat.service.ts
-│       │   ├── chat/
-│       │   │   ├── chat.component.ts
-│       │   │   ├── chat.component.html
-│       │   │   └── chat.component.css
+│       │   ├── chat/           # Main chat UI + sidebar profile section
+│       │   │   ├── chat.component.ts     ← profile menu logic, logout handler
+│       │   │   ├── chat.component.html   ← sidebar profile trigger + popover
+│       │   │   └── chat.component.css    ← profile styles (ChatGPT-style)
 │       │   ├── app.ts
 │       │   ├── app.config.ts
 │       │   └── app.routes.ts
