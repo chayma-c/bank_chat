@@ -1,13 +1,19 @@
-version: '3.9'
-
 services:
   keycloak:
     image: quay.io/keycloak/keycloak:latest
     container_name: bank_chat_keycloak
     environment:
-      KEYCLOAK_ADMIN: admin
-      KEYCLOAK_ADMIN_PASSWORD: admin
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+    volumes:
+      - ./keycloak/themes/mytheme:/opt/keycloak/themes/mytheme
+      - ./keycloak/realm-export.json:/opt/keycloak/data/import/realm-export.json
     ports:
-      - "8080:8080"
-    command: start-dev
+      - "127.0.0.1:8080:8080"
+    command: >
+      start-dev
+      --import-realm
+      --spi-theme--cache-themes=false
+      --spi-theme--cache-templates=false
+      --spi-theme--static-max-age=-1
     restart: unless-stopped
