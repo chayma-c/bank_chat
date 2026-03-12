@@ -13,6 +13,7 @@ from .graph.nodes import detect_intent, stream_agent_response, llm
 from .graph.state import BankChatState
 from .models import Conversation, Message
 from .serializers import ConversationSerializer, MessageSerializer
+from .graph.fraud.graph import run_fraud_agent
 
 
 # ── Fonction helper pour construire le contexte avec résumé adaptatif ────────
@@ -258,3 +259,67 @@ class StreamChatView(View):
         response['Access-Control-Allow-Methods'] = 'POST, OPTIONS'
         response['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
         return response
+# ══════════════════════════════════════════════════════════════════════
+
+class FraudAnalyzeView(APIView):
+    """
+    Direct fraud analysis endpoint.
+    
+    POST /api/fraud/analyze/
+    {
+        "iban": "IBAN_FR123",
+        "action": "fraud_check",      // or "export_transactions"
+        "user_id": "user123",         // optional
+        "session_id": "xxx",          // optional
+        "excel_path": ""              // optional, defaults to data/transactions.xlsx
+    }
+    """
+
+    def post(self, request):
+        data = request.data
+        iban = data.get("iban", "")
+        action = data.get("action", "fraud_check")
+        user_id = data.get("user_id", "anonymous")
+        session_id = data.get("session_id", str(uuid.uuid4()))
+        excel_path = data.get("excel_path", "")
+
+        if not iban:
+            return Response(
+                {"error": "IBAN requis. Fournissez un IBAN valide."},
+                status=400,
+            )
+
+        # Build a synthetic message for the fraud agent
+        if action == "export_transactions":
+            user_msg = f"Exporte toutes les transactions pour l'IBAN {iban}"
+        else:
+            user_msg = f"Analyse les fraudes pour l'IBAN {iban}"
+
+        messages = [HumanMessage(content=user_msg)]
+
+        try:
+            result = run_fraud_agent(
+                messages=messages,
+                user_id=user_id,
+                session_id=session_id,
+                excel_path=excel_path,
+            )
+
+            return Response({
+                "iban": result.get("iban", iban),
+                "action": result.get("action", action),
+                "transactions_count": result.get("transactions_count", 0),
+                "account_summary": result.get("account_summary"),
+                "score_behavioral": result.get("score_behavioral", 0),
+                "score_aml": result.get("score_aml", 0),
+                "score_final": result.get("score_final", 0),
+                "risk_level": result.get("risk_level", ""),
+                "tracfin_required": result.get("tracfin_required", False),
+                "fraud_results": result.get("fraud_results", []),
+                "report_path": result.get("report_path", ""),
+                "summary": result.get("llm_summary", ""),
+                "error": result.get("error"),
+            })
+
+        except Exception as e:
+            return Response({"error": str(e)}, status=500)
