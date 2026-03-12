@@ -5,15 +5,15 @@ services:
     image: postgres:16-alpine
     container_name: bank_chat_db
     environment:
-      POSTGRES_DB: ${POSTGRES_DB:-bank_chat}
-      POSTGRES_USER: ${POSTGRES_USER:-postgres}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgresql}
+      POSTGRES_DB: ${DB_NAME:-bank_chat}           # ✅ aligné avec .env
+      POSTGRES_USER: ${DB_USER:-postgres}          # ✅ aligné avec .env
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-postgresql} # ✅ aligné avec .env
     volumes:
       - postgres_data:/var/lib/postgresql/data
     ports:
       - "5432:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres}"]  # ✅
       interval: 10s
       timeout: 5s
       retries: 5
@@ -28,11 +28,11 @@ services:
       KC_BOOTSTRAP_ADMIN_PASSWORD: admin
       # 🔑 Connexion Keycloak → PostgreSQL (users persistés)
       KC_DB: postgres
-      KC_DB_URL: jdbc:postgresql://db:5432/${POSTGRES_DB:-bank_chat}
-      KC_DB_USERNAME: ${POSTGRES_USER:-postgres}
-      KC_DB_PASSWORD: ${POSTGRES_PASSWORD:-postgresql}
+      KC_DB_URL: jdbc:postgresql://db:5432/${DB_NAME:-bank_chat}   # ✅
+      KC_DB_USERNAME: ${DB_USER:-postgres}                         # ✅
+      KC_DB_PASSWORD: ${DB_PASSWORD:-postgresql}                   # ✅
     volumes:
-      - ./keycloak/themes/mytheme:/opt/keycloak/themes/mytheme  # 🎨 thème monté
+      - ./keycloak/themes/mytheme:/opt/keycloak/themes/mytheme
       - ./keycloak/realm-export.json:/opt/keycloak/data/import/realm-export.json
     ports:
       - "8080:8080"
@@ -59,15 +59,16 @@ services:
       - "8000:8000"
     depends_on:
       db:
-        condition: service_healthy  
+        condition: service_healthy
       keycloak:
-        condition: service_started  
+        condition: service_started
     command: >
       sh -c "
         echo '⏳ Waiting for PostgreSQL...' &&
         while ! nc -z db 5432; do sleep 1; done &&
         echo '✅ PostgreSQL is ready!' &&
-        python manage.py migrate &&
+        python manage.py migrate --noinput &&
+        echo '✅ Migrations done!' &&
         python manage.py runserver 0.0.0.0:8000
       "
     restart: unless-stopped
