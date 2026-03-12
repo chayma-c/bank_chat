@@ -9,46 +9,24 @@ from .state import BankChatState
 def get_llm():
     """
     Initialise le LLM selon la configuration dans .env
-    
-    Variables d'environnement :
-    - LLM_PROVIDER: "groq" (défaut) ou "ollama"
-    - GROQ_API_KEY: clé API Groq (si provider=groq)
-    - GROQ_MODEL: modèle Groq (défaut: llama-3.3-70b-versatile)
-    - OLLAMA_BASE_URL: URL Ollama (défaut: http://localhost:11434)
-    - OLLAMA_MODEL: modèle Ollama (défaut: llama3.2)
     """
     provider = os.getenv("LLM_PROVIDER", "groq").lower()
-    
+
     if provider == "ollama":
-        # Configuration Ollama (modèle local)
         base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
         model = os.getenv("OLLAMA_MODEL", "llama3.2")
-        
         print(f"✅ Using Ollama LLM: {model} at {base_url}")
-        
-        return ChatOllama(
-            base_url=base_url,
-            model=model,
-            temperature=0.7,
-        )
+        return ChatOllama(base_url=base_url, model=model, temperature=0.7)
     else:
-        # Configuration Groq (API cloud) - par défaut
         api_key = os.getenv("GROQ_API_KEY")
         model = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
-        
         if not api_key:
             raise ValueError(
                 "GROQ_API_KEY is required when LLM_PROVIDER=groq. "
                 "Set it in your .env file or switch to LLM_PROVIDER=ollama"
             )
-        
         print(f"✅ Using Groq LLM: {model}")
-        
-        return ChatGroq(
-            model=model,
-            api_key=api_key,
-            temperature=0.7,
-        )
+        return ChatGroq(model=model, api_key=api_key, temperature=0.7)
 
 # Initialiser le LLM au démarrage
 llm = get_llm()
@@ -77,6 +55,14 @@ SYSTEM_PROMPTS = {
         "account opening procedures, loan and mortgage inquiries, and product information. "
         "Be empathetic, patient and always offer a clear next step."
     ),
+    "fraud_agent": (
+        "You are BankChat, a specialized fraud detection and AML analysis agent. "
+        "You help with: fraud detection on accounts, transaction anomaly analysis, "
+        "AML (Anti-Money Laundering) checks, suspicious activity monitoring, "
+        "TRACFIN declarations, risk scoring, and generating fraud reports from Excel data. "
+        "You can analyze transactions by IBAN, detect anomalies, and export reports. "
+        "Always ask for the IBAN if not provided."
+    ),
     "fallback": (
         "You are BankChat, a professional AI banking assistant for a modern retail bank. "
         "Answer banking-related questions clearly, concisely and professionally. "
@@ -89,15 +75,19 @@ SYSTEM_PROMPTS = {
 # ── Intent detection ──────────────────────────────────────────────────────────
 
 def detect_intent(state: BankChatState) -> BankChatState:
-    """Classifies the user message into one of 4 intents."""
+    """Classifies the user message into one of 5 intents (including fraud)."""
     last_msg = state["messages"][-1].content
 
     prompt = (
         "You are a banking intent classifier. "
         "Read the customer message below and reply with ONLY one word from this list:\n"
-        "  account   → balance, transactions, statements, account info\n"
-        "  transfer  → send money, wire, payment, IBAN, beneficiary\n"
-        "  support   → problem, card blocked, fraud, complaint, help\n"
+        "  account   → balance, statements, account info, account details\n"
+        "  transfer  → send money, wire, payment, beneficiary\n"
+        "  support   → problem, card blocked, complaint, help, technical issue\n"
+        "  fraud     → fraud detection, suspicious activity, IBAN analysis, anomaly check, "
+        "AML, blanchiment, export transactions, analyse fraude, vérifier fraude, "
+        "detect fraud, check fraud, weird behaviour, suspicious transactions, "
+        "transaction analysis, risque, risk analysis, IBAN_\n"
         "  fallback  → anything else\n\n"
         f"Customer message: {last_msg}\n"
         "Reply with one word only."
@@ -105,9 +95,12 @@ def detect_intent(state: BankChatState) -> BankChatState:
 
     response = llm.invoke(prompt)
     intent = response.content.strip().lower().split()[0]
-    # Sanitize in case LLM returns something unexpected
-    if intent not in ("account", "transfer", "support"):
+
+    # Sanitize — now includes "fraud"
+    if intent not in ("account", "transfer", "support", "fraud"):
         intent = "fallback"
+
+    print(f"🧠 Detected intent: {intent} (from: '{last_msg[:80]}...')")
 
     return {**state, "intent": intent}
 
@@ -118,6 +111,7 @@ def route_to_agent(state: BankChatState) -> str:
         "account":  "account_agent",
         "transfer": "transfer_agent",
         "support":  "support_agent",
+        "fraud":    "fraud_agent",          # ✨ NEW ROUTE
     }.get(state["intent"], "fallback")
 
 
@@ -154,6 +148,9 @@ def stream_agent_response(intent: str, messages: list):
     """
     Yields text tokens from the LLM one by one.
     Used by StreamChatView for real-time streaming.
+
+    For 'fraud' intent, we DON'T stream — the fraud agent
+    handles its own pipeline. This is only for simple LLM agents.
     """
     agent_key = {
         "account":  "account_agent",
@@ -161,11 +158,18 @@ def stream_agent_response(intent: str, messages: list):
         "support":  "support_agent",
     }.get(intent, "fallback")
 
+    # If fraud intent reaches here, redirect to fraud_agent streaming
+    if intent == "fraud":
+        from .fraud.graph import run_fraud_agent
+        result = run_fraud_agent(messages=messages)
+        summary = result.get("llm_summary", "Analyse de fraude terminée.")
+        # Yield the full summary as a single chunk
+        yield summary, "fraud_agent"
+        return
+
     system = SystemMessage(content=SYSTEM_PROMPTS[agent_key])
     messages_with_system = [system] + list(messages)
 
     for chunk in llm.stream(messages_with_system):
         if chunk.content:
             yield chunk.content, agent_key
-
-

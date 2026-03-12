@@ -5,7 +5,6 @@ psycopg2-binary
 langchain
 langchain-core
 langchain-groq
-langchain-ollama
 langgraph
 langchain-mcp-adapters
 python-dotenv
@@ -13,3 +12,6 @@ channels
 PyJWT
 cryptography
 requests
+pandas
+openpyxl
+numpy
