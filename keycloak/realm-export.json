@@ -663,7 +663,9 @@
         "post.logout.redirect.uris": "http://localhost:4200/*",
         "oauth2.device.authorization.grant.enabled": "false",
         "display.on.consent.screen": "false",
-        "backchannel.logout.revoke.offline.tokens": "false"
+        "backchannel.logout.revoke.offline.tokens": "false",
+        "pkce.code.challenge.method": "S256"
+
       },
       "authenticationFlowBindingOverrides": {},
       "fullScopeAllowed": true,
@@ -1505,10 +1507,10 @@
     "strictTransportSecurity": "max-age=31536000; includeSubDomains"
   },
   "smtpServer": {},
-  "loginTheme": "keycloak",
-  "accountTheme": "keycloak.v3",
-  "adminTheme": "keycloak.v2",
-  "emailTheme": "keycloak",
+  "loginTheme": "mytheme",
+  "accountTheme": "mytheme",
+  "adminTheme": "mytheme",
+  "emailTheme": "mytheme",
   "eventsEnabled": false,
   "eventsListeners": [
     "jboss-logging"
