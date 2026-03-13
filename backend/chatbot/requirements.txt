@@ -6,6 +6,7 @@ langchain
 langchain-core
 langchain-groq
 langgraph
+langchain-ollama
 langchain-mcp-adapters
 python-dotenv
 channels
