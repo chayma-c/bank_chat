@@ -14,6 +14,50 @@ import os
 from pathlib import Path
 from dotenv import load_dotenv
 
+
+# ── Cache Redis ───────────────────────────────────────────────────────────────
+# django-redis utilise Redis comme backend du cache Django standard.
+# On accède via django.core.cache.cache — aucun import redis direct nécessaire.
+#
+# FALLBACK : Si Redis n'est pas dispo (ex: développement sans Redis),
+# on utilise LocMemCache (mémoire locale du process).
+# Ça garantit que le backend démarre toujours, même sans Redis.
+ 
+REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
+ 
+CACHES = {
+    "default": {
+        "BACKEND": "django_redis.cache.RedisCache",
+        "LOCATION": REDIS_URL,
+        "OPTIONS": {
+            "CLIENT_CLASS": "django_redis.client.DefaultClient",
+            # En cas de panne Redis → ne pas crasher, juste ignorer le cache
+            "IGNORE_EXCEPTIONS": True,
+        },
+        "KEY_PREFIX": "bankchat",
+        # Timeout par défaut = 1h (aligné avec SESSION_TTL dans memory_manager.py)
+        "TIMEOUT": 3600,
+    }
+}
+ 
+# ── Logging mémoire (optionnel mais recommandé pour monitoring) ───────────────
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+        },
+    },
+    "loggers": {
+        "chatbot.memory_manager": {
+            "handlers": ["console"],
+            "level": os.getenv("MEMORY_LOG_LEVEL", "INFO"),
+            "propagate": False,
+        },
+    },
+}
+
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 

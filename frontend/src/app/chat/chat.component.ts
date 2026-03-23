@@ -24,6 +24,10 @@ interface LocalMessage {
 })
 export class ChatComponent implements OnInit, AfterViewChecked {
   @ViewChild('messagesEnd') private messagesEnd!: ElementRef;
+  @ViewChild('messagesArea') private messagesArea?: ElementRef<HTMLElement>;
+
+  private stickToBottom = true;
+  private readonly bottomThresholdPx = 48;
 
   private keycloak = inject(KeycloakService);
   readonly userId = this.keycloak.userId;
@@ -51,7 +55,9 @@ export class ChatComponent implements OnInit, AfterViewChecked {
   }
 
   ngAfterViewChecked(): void {
-    this.scrollToBottom();
+    if (this.stickToBottom) {
+      this.scrollToBottom();
+    }
   }
 
   /** Close profile menu when clicking anywhere outside */
@@ -63,9 +69,24 @@ export class ChatComponent implements OnInit, AfterViewChecked {
     }
   }
 
+  onMessagesScroll(): void {
+    this.stickToBottom = this.isNearBottom();
+  }
+
+  private isNearBottom(): boolean {
+    const container = this.messagesArea?.nativeElement;
+    if (!container) {
+      return true;
+    }
+
+    const distanceFromBottom =
+      container.scrollHeight - container.scrollTop - container.clientHeight;
+    return distanceFromBottom <= this.bottomThresholdPx;
+  }
+
   private scrollToBottom(): void {
     try {
-      this.messagesEnd.nativeElement.scrollIntoView({ behavior: 'smooth' });
+      this.messagesEnd.nativeElement.scrollIntoView({ behavior: 'auto', block: 'end' });
     } catch {}
   }
 
@@ -80,6 +101,7 @@ export class ChatComponent implements OnInit, AfterViewChecked {
     this.sessionId.set(uuidv4());
     this.messages.set([]);
     this.activeSession.set('');
+    this.stickToBottom = true;
   }
 
   loadConversation(sessionId: string): void {
@@ -87,6 +109,7 @@ export class ChatComponent implements OnInit, AfterViewChecked {
     this.chatService.getConversation(sessionId).subscribe({
       next: (conv) => {
         this.sessionId.set(sessionId);
+        this.stickToBottom = true;
         this.messages.set(
           conv.messages.map(m => ({
             role: m.role,
@@ -116,6 +139,7 @@ export class ChatComponent implements OnInit, AfterViewChecked {
 
     this.userInput.set('');
     this.sending.set(true);
+    this.stickToBottom = true;
 
     this.messages.update(msgs => [...msgs, { role: 'user', content: text }]);
     this.messages.update(msgs => [...msgs, { role: 'assistant', content: '', loading: true }]);

@@ -5,15 +5,29 @@ services:
     image: postgres:16-alpine
     container_name: bank_chat_db
     environment:
-      POSTGRES_DB: ${DB_NAME:-bank_chat}           # ✅ aligné avec .env
-      POSTGRES_USER: ${DB_USER:-postgres}          # ✅ aligné avec .env
-      POSTGRES_PASSWORD: ${DB_PASSWORD:-postgresql} # ✅ aligné avec .env
+      POSTGRES_DB: ${DB_NAME:-bank_chat}
+      POSTGRES_USER: ${DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-postgresql}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     ports:
       - "5432:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres}"]  # ✅
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # ── Redis (mémoire court terme — cache de session) ─────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: bank_chat_redis
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -26,11 +40,10 @@ services:
     environment:
       KC_BOOTSTRAP_ADMIN_USERNAME: admin
       KC_BOOTSTRAP_ADMIN_PASSWORD: admin
-      # 🔑 Connexion Keycloak → PostgreSQL (users persistés)
       KC_DB: postgres
-      KC_DB_URL: jdbc:postgresql://db:5432/${DB_NAME:-bank_chat}   # ✅
-      KC_DB_USERNAME: ${DB_USER:-postgres}                         # ✅
-      KC_DB_PASSWORD: ${DB_PASSWORD:-postgresql}                   # ✅
+      KC_DB_URL: jdbc:postgresql://db:5432/${DB_NAME:-bank_chat}
+      KC_DB_USERNAME: ${DB_USER:-postgres}
+      KC_DB_PASSWORD: ${DB_PASSWORD:-postgresql}
     volumes:
       - ./keycloak/themes/mytheme:/opt/keycloak/themes/mytheme
       - ./keycloak/realm-export.json:/opt/keycloak/data/import/realm-export.json
@@ -53,20 +66,31 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     container_name: bank_chat_backend
+    volumes:
+      - ./backend/data:/app/data
     env_file:
       - backend/.env
+    environment:
+      REDIS_URL: redis://redis:6379/0
     ports:
       - "8000:8000"
     depends_on:
       db:
         condition: service_healthy
+      redis:
+        condition: service_healthy
       keycloak:
         condition: service_started
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     command: >
       sh -c "
         echo '⏳ Waiting for PostgreSQL...' &&
         while ! nc -z db 5432; do sleep 1; done &&
         echo '✅ PostgreSQL is ready!' &&
+        echo '⏳ Waiting for Redis...' &&
+        while ! nc -z redis 6379; do sleep 1; done &&
+        echo '✅ Redis is ready!' &&
         python manage.py migrate --noinput &&
         echo '✅ Migrations done!' &&
         python manage.py runserver 0.0.0.0:8000
