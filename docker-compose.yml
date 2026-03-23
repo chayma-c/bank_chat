@@ -19,7 +19,7 @@ services:
       retries: 5
     restart: unless-stopped
 
-  # ── Redis (mémoire court terme — cache de session) ─────────────────────────
+  # ── Redis ──────────────────────────────────────────────────────────────────
   redis:
     image: redis:7-alpine
     container_name: bank_chat_redis
@@ -33,7 +33,7 @@ services:
       retries: 5
     restart: unless-stopped
 
-  # ── Keycloak (Auth) ────────────────────────────────────────────────────────
+  # ── Keycloak ───────────────────────────────────────────────────────────────
   keycloak:
     image: quay.io/keycloak/keycloak:latest
     container_name: bank_chat_keycloak
@@ -93,6 +93,12 @@ services:
         echo '✅ Redis is ready!' &&
         python manage.py migrate --noinput &&
         echo '✅ Migrations done!' &&
+        (while true; do
+          sleep 86400 &&
+          echo '🗄️ Running nightly archive...' &&
+          python manage.py archive_messages &&
+          echo '✅ Archive done!'
+        done) &
         python manage.py runserver 0.0.0.0:8000
       "
     restart: unless-stopped

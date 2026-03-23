@@ -309,53 +309,52 @@ class MemoryManager:
     def __init__(self, llm):
         self.llm = llm
 
-    def build_context(self, conversation, new_message: str) -> list[BaseMessage]:
-        """
-        Point d'entrée principal.
-        Remplace build_conversation_context() dans views.py.
-        
-        Returns:
-            Liste de BaseMessage prête à envoyer au LLM,
-            dans le budget TOKEN_BUDGET.
-        """
+    def build_context(self, conversation, new_message: str):
         session_id = str(conversation.session_id)
-
-        # 1. Charger tous les messages PostgreSQL
         all_db_msgs = list(conversation.messages.order_by('created_at'))
         total = len(all_db_msgs)
-
-        # 2. Nouveau message seul si conversation vide
+    
         if total == 0:
-            return [HumanMessage(content=new_message)]
-
-        # 3. Séparer anciens et récents
-        recent_count = min(RECENT_TURNS * 2, total)  # *2 car user+assistant
-        old_msgs   = all_db_msgs[:total - recent_count]
-        recent_msgs = all_db_msgs[total - recent_count:]
-
-        # 4. Construire les messages récents LangChain
-        recent_lc = self._db_to_langchain(recent_msgs)
-
-        # 5. Résumé (uniquement si anciens messages existent)
+            # Même si pas de messages, inclure le résumé archivé si présent
+            pg_summary = getattr(conversation, 'summary', '') or ''
+            context = []
+            if pg_summary:
+                from langchain_core.messages import SystemMessage
+                context.append(SystemMessage(content=f"📋 Historique résumé :\n{pg_summary}"))
+            from langchain_core.messages import HumanMessage
+            context.append(HumanMessage(content=new_message))
+            return context
+    
+        recent_count = min(RECENT_TURNS * 2, total)
+        old_msgs     = all_db_msgs[:total - recent_count]
+        recent_msgs  = all_db_msgs[total - recent_count:]
+        recent_lc    = self._db_to_langchain(recent_msgs)
+    
         summary_msg = None
-        if old_msgs and total > SUMMARY_TRIGGER:
-            summary_text = self._get_or_build_summary(session_id, old_msgs)
+        pg_summary  = getattr(conversation, 'summary', '') or ''
+    
+        # Résumé si : anciens msgs présents OU résumé archivé en PG
+        if (old_msgs and total > SUMMARY_TRIGGER) or pg_summary:
+            summary_text = self._get_or_build_summary(
+                session_id,
+                old_msgs,
+                conversation=conversation,   # ← on passe la conversation pour lire .summary
+            )
             if summary_text:
+                from langchain_core.messages import SystemMessage
                 summary_msg = SystemMessage(
                     content=f"📋 Contexte de la conversation :\n{summary_text}"
                 )
-
-        # 6. Assembler avec gestion du budget tokens
+    
         context = self._assemble_within_budget(
             summary_msg=summary_msg,
             recent_messages=recent_lc,
             new_message=new_message,
         )
-
-        # 7. Mettre à jour le cache Redis avec les récents (pour la prochaine requête)
+    
         self._refresh_recent_cache(session_id, recent_msgs)
-
         return context
+    
 
     def invalidate_session(self, session_id: str) -> None:
         """Invalide le cache Redis d'une session (ex: après suppression)."""
@@ -375,36 +374,44 @@ class MemoryManager:
                 result.append(AIMessage(content=msg.content))
         return result
 
-    def _get_or_build_summary(self, session_id: str, old_msgs) -> str:
+    def _get_or_build_summary(self, session_id: str, old_msgs, conversation=None) -> str:
         """
-        Stratégie cache-aside pour le résumé :
-        1. Essayer Redis (rapide, ~1ms)
-        2. Si absent → générer via LLM + stocker dans Redis
-        
-        Le résumé est invalidé uniquement quand de NOUVEAUX anciens messages
-        s'accumulent (c'est-à-dire quand la fenêtre glisse).
+        Priorité de lecture du résumé :
+        1. Redis (cache chaud, ~1ms)
+        2. Conversation.summary dans PostgreSQL (résumé consolidé archivé)
+        3. Générer via LLM + stocker dans Redis
+    
+        Le Conversation.summary est le résumé des messages DÉJÀ SUPPRIMÉS.
+        Il sert de base pour le résumé incrémental des messages encore présents.
         """
-        # Cache hit → retourner directement
+        # 1. Cache Redis
         cached = cache_get_summary(session_id)
         if cached:
-            logger.debug(f"[Memory] Cache HIT summary for session {session_id[:8]}...")
+            logger.debug(f"[Memory] Redis HIT for {session_id[:8]}")
             return cached
-
-        # Cache miss → générer
-        logger.debug(f"[Memory] Cache MISS — generating summary for session {session_id[:8]}...")
+    
+        # 2. Résumé archivé dans PG (base de départ si archivage a eu lieu)
+        pg_summary = ""
+        if conversation and hasattr(conversation, 'summary'):
+            pg_summary = conversation.summary or ""
+    
+        # 3. Générer le résumé des messages anciens encore en base
         old_lc = self._db_to_langchain(old_msgs)
-
-        # Résumé incrémental si possible (récupère l'ancien résumé depuis Redis — déjà expiré)
-        # Dans ce cas on repart de zéro, c'est correct
+    
+        if not old_lc and pg_summary:
+            # Archivage total — plus rien à résumer, juste le résumé PG
+            cache_set_summary(session_id, pg_summary)
+            return pg_summary
+    
         summary = generate_summary(
             messages_to_summarize=old_lc,
-            existing_summary=None,
+            existing_summary=pg_summary or None,  # combine avec l'archivé si existe
             llm=self.llm,
         )
-
-        # Stocker dans Redis
+    
         cache_set_summary(session_id, summary)
         return summary
+ 
 
     def _assemble_within_budget(
         self,
