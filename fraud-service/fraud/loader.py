@@ -6,11 +6,43 @@ import os
 import re
 import pandas as pd
 from pathlib import Path
-from typing import Tuple, Optional
+from typing import Optional
 
 
-# ── Default data directory ────────────────────────────────────────────────────
-DATA_DIR = Path(__file__).resolve().parent.parent.parent.parent / "data"
+# ── Data locations ───────────────────────────────────────────────────────────
+# The service runs in Docker with the file mounted at /app/data.
+# In local dev, the canonical file lives in backend/data/.
+# We search both, plus an optional FRAUD_DATA_DIR override.
+TRANSACTION_FILENAMES = ("transactions.xlsx", "transactions.xls", "transactions.csv")
+
+
+def _candidate_data_directories() -> list[Path]:
+    dirs: list[Path] = []
+
+    env_dir = os.getenv("FRAUD_DATA_DIR", "").strip()
+    if env_dir:
+        dirs.append(Path(env_dir))
+
+    # Standard Docker mount used by docker-compose.yml
+    dirs.append(Path("/app/data"))
+
+    # Direct mount fallback when the container is started with /data
+    dirs.append(Path("/data"))
+
+    # Local repository layout: .../bank_chat/backend/data
+    for ancestor in Path(__file__).resolve().parents:
+        dirs.append(ancestor / "backend" / "data")
+        dirs.append(ancestor / "data")
+
+    # Remove duplicates while preserving order
+    unique_dirs: list[Path] = []
+    seen: set[str] = set()
+    for directory in dirs:
+        key = str(directory)
+        if key not in seen:
+            seen.add(key)
+            unique_dirs.append(directory)
+    return unique_dirs
 
 
 def validate_iban(iban: str) -> bool:
@@ -23,25 +55,28 @@ def validate_iban(iban: str) -> bool:
 def find_excel_file(excel_path: Optional[str] = None) -> Path:
     """
     Locate the transactions Excel file.
-    Priority: explicit path → DATA_DIR/transactions.xlsx
+    Priority: explicit path → FRAUD_DATA_DIR → /app/data → local backend/data.
     """
-    if excel_path and os.path.isfile(excel_path):
-        return Path(excel_path)
+    searched: list[Path] = []
 
-    default_path = DATA_DIR / "transactions.xlsx"
-    if default_path.exists():
-        return default_path
+    if excel_path:
+        explicit = Path(excel_path)
+        searched.append(explicit)
+        if explicit.is_file():
+            return explicit
 
-    # Also check for .xls
-    default_xls = DATA_DIR / "transactions.xls"
-    if default_xls.exists():
-        return default_xls
+    for directory in _candidate_data_directories():
+        for filename in TRANSACTION_FILENAMES:
+            candidate = directory / filename
+            searched.append(candidate)
+            if candidate.is_file():
+                return candidate
 
     raise FileNotFoundError(
         f"Transaction file not found. Looked in:\n"
-        f"  1. {excel_path}\n"
-        f"  2. {default_path}\n"
-        f"Place your Excel file in backend/data/transactions.xlsx"
+        + "\n".join(f"  {idx + 1}. {path}" for idx, path in enumerate(searched))
+        + "\nSet FRAUD_DATA_DIR, or place the file in /app/data/transactions.xlsx "
+        "(Docker) or backend/data/transactions.xlsx (local)."
     )
 
 
@@ -51,7 +86,11 @@ def load_transactions(excel_path: Optional[str] = None) -> pd.DataFrame:
     Normalizes column names and parses timestamps.
     """
     path = find_excel_file(excel_path)
-    df = pd.read_excel(path)
+
+    if path.suffix.lower() == ".csv":
+        df = pd.read_csv(path)
+    else:
+        df = pd.read_excel(path)
 
     # Normalize column names: strip whitespace, lowercase
     df.columns = df.columns.str.strip().str.lower()

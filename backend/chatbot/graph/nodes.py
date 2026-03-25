@@ -1,25 +1,49 @@
 import os
+import re
+import httpx
 from langchain_groq import ChatGroq
 from langchain_ollama import ChatOllama
-from langchain_core.messages import SystemMessage, AIMessage
+from langchain_core.messages import SystemMessage, AIMessage, HumanMessage
 from .state import BankChatState
 
-# ── Configuration du LLM (Groq ou Ollama) ─────────────────────────
+FRAUD_SERVICE_URL = os.getenv("FRAUD_SERVICE_URL", "http://fraud-service:8001")
+
+# ── IBAN extraction helper ────────────────────────────────────────────────────
+
+IBAN_PATTERN = re.compile(
+    r"\b([A-Z]{2}\d{2}[\s]?[\dA-Z]{4}[\s]?[\dA-Z]{4}[\s]?[\dA-Z]{4}[\s]?[\dA-Z]{0,16})\b"
+    r"|"
+    r"\b(IBAN_[A-Z]{2}\d+)\b",
+    re.IGNORECASE,
+)
+
+def extract_iban(messages: list) -> str:
+    """
+    Extrait le premier IBAN trouvé dans la liste de messages.
+    Parcourt du plus récent au plus ancien.
+    Retourne "" si aucun IBAN trouvé.
+    """
+    for msg in reversed(messages):
+        content = msg.content if hasattr(msg, "content") else str(msg)
+        match = IBAN_PATTERN.search(content)
+        if match:
+            return (match.group(1) or match.group(2) or "").replace(" ", "").upper()
+    return ""
+
+
+# ── Configuration du LLM (Groq ou Ollama) ────────────────────────────────────
 
 def get_llm():
-    """
-    Initialise le LLM selon la configuration dans .env
-    """
     provider = os.getenv("LLM_PROVIDER", "groq").lower()
 
     if provider == "ollama":
         base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-        model = os.getenv("OLLAMA_MODEL", "llama3.2")
+        model    = os.getenv("OLLAMA_MODEL", "llama3.2")
         print(f"✅ Using Ollama LLM: {model} at {base_url}")
         return ChatOllama(base_url=base_url, model=model, temperature=0.7)
     else:
         api_key = os.getenv("GROQ_API_KEY")
-        model = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+        model   = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
         if not api_key:
             raise ValueError(
                 "GROQ_API_KEY is required when LLM_PROVIDER=groq. "
@@ -28,10 +52,10 @@ def get_llm():
         print(f"✅ Using Groq LLM: {model}")
         return ChatGroq(model=model, api_key=api_key, temperature=0.7)
 
-# Initialiser le LLM au démarrage
+
 llm = get_llm()
 
-# ── Specialized system prompts per agent ─────────────────────────────────────
+# ── System prompts ────────────────────────────────────────────────────────────
 
 SYSTEM_PROMPTS = {
     "account_agent": (
@@ -55,14 +79,6 @@ SYSTEM_PROMPTS = {
         "account opening procedures, loan and mortgage inquiries, and product information. "
         "Be empathetic, patient and always offer a clear next step."
     ),
-    "fraud_agent": (
-        "You are BankChat, a specialized fraud detection and AML analysis agent. "
-        "You help with: fraud detection on accounts, transaction anomaly analysis, "
-        "AML (Anti-Money Laundering) checks, suspicious activity monitoring, "
-        "TRACFIN declarations, risk scoring, and generating fraud reports from Excel data. "
-        "You can analyze transactions by IBAN, detect anomalies, and export reports. "
-        "Always ask for the IBAN if not provided."
-    ),
     "fallback": (
         "You are BankChat, a professional AI banking assistant for a modern retail bank. "
         "Answer banking-related questions clearly, concisely and professionally. "
@@ -75,7 +91,6 @@ SYSTEM_PROMPTS = {
 # ── Intent detection ──────────────────────────────────────────────────────────
 
 def detect_intent(state: BankChatState) -> BankChatState:
-    """Classifies the user message into one of 5 intents (including fraud)."""
     last_msg = state["messages"][-1].content
 
     prompt = (
@@ -94,40 +109,35 @@ def detect_intent(state: BankChatState) -> BankChatState:
     )
 
     response = llm.invoke(prompt)
-    intent = response.content.strip().lower().split()[0]
+    intent   = response.content.strip().lower().split()[0]
 
-    # Sanitize — now includes "fraud"
     if intent not in ("account", "transfer", "support", "fraud"):
         intent = "fallback"
 
     print(f"🧠 Detected intent: {intent} (from: '{last_msg[:80]}...')")
-
     return {**state, "intent": intent}
 
 
 def route_to_agent(state: BankChatState) -> str:
-    """Returns the name of the next node based on detected intent."""
     return {
         "account":  "account_agent",
         "transfer": "transfer_agent",
         "support":  "support_agent",
-        "fraud":    "fraud_agent",          # ✨ NEW ROUTE
+        "fraud":    "fraud_agent",
     }.get(state["intent"], "fallback")
 
 
-# ── Specialized agent nodes ───────────────────────────────────────────────────
+# ── Agent nodes ───────────────────────────────────────────────────────────────
 
 def _run_agent(state: BankChatState, agent_key: str) -> BankChatState:
-    """Generic agent runner — injects the right system prompt."""
     system = SystemMessage(content=SYSTEM_PROMPTS[agent_key])
     messages_with_system = [system] + list(state["messages"])
     response = llm.invoke(messages_with_system)
     return {
         **state,
         "messages": [AIMessage(content=response.content)],
-        "agent": agent_key,
+        "agent":    agent_key,
     }
-
 
 def account_agent(state: BankChatState) -> BankChatState:
     return _run_agent(state, "account_agent")
@@ -142,30 +152,55 @@ def handle_fallback(state: BankChatState) -> BankChatState:
     return _run_agent(state, "fallback")
 
 
-# ── Streaming helper (used directly by the stream view) ──────────────────────
+# ── Streaming helper ──────────────────────────────────────────────────────────
 
 def stream_agent_response(intent: str, messages: list):
     """
-    Yields text tokens from the LLM one by one.
-    Used by StreamChatView for real-time streaming.
-
-    For 'fraud' intent, we DON'T stream — the fraud agent
-    handles its own pipeline. This is only for simple LLM agents.
+    Yields (token, agent_key) tuples.
+    Pour le fraud intent : appel HTTP au fraud-service (pas de streaming token par token).
+    Pour les autres agents : streaming LLM natif.
     """
+    if intent == "fraud":
+        # Extraire l'IBAN du dernier message utilisateur
+        iban = extract_iban(messages)
+
+        # Récupérer le texte brut du dernier message pour l'envoyer au service
+        last_msg = ""
+        for msg in reversed(messages):
+            if msg.__class__.__name__ == "HumanMessage":
+                last_msg = msg.content
+                break
+
+        try:
+            response = httpx.post(
+                f"{FRAUD_SERVICE_URL}/analyze",
+                json={
+                    "message":    last_msg,
+                    "iban":       iban,
+                    "action":     "fraud_check",
+                    "user_id":    "anonymous",
+                    "session_id": "",
+                    "excel_path": "",
+                },
+                timeout=120.0,
+            )
+            response.raise_for_status()
+            result  = response.json()
+            summary = result.get("llm_summary", result.get("summary", "Analyse de fraude terminée."))
+        except httpx.TimeoutException:
+            summary = "⏱️ Le service de fraude a mis trop de temps à répondre. Réessayez."
+        except Exception as e:
+            summary = f"❌ Erreur service de fraude : {str(e)}"
+
+        yield summary, "fraud_agent"
+        return
+
+    # Agents classiques — streaming token par token
     agent_key = {
         "account":  "account_agent",
         "transfer": "transfer_agent",
         "support":  "support_agent",
     }.get(intent, "fallback")
-
-    # If fraud intent reaches here, redirect to fraud_agent streaming
-    if intent == "fraud":
-        from .fraud.graph import run_fraud_agent
-        result = run_fraud_agent(messages=messages)
-        summary = result.get("llm_summary", "Analyse de fraude terminée.")
-        # Yield the full summary as a single chunk
-        yield summary, "fraud_agent"
-        return
 
     system = SystemMessage(content=SYSTEM_PROMPTS[agent_key])
     messages_with_system = [system] + list(messages)

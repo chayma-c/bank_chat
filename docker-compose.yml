@@ -60,6 +60,29 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  # ── Service de détection de fraude ───────────────────────────────────────
+  fraud-service:
+    build:
+      context: ./fraud-service
+      dockerfile: Dockerfile
+    container_name: bank_chat_fraud
+    volumes:
+      - ./backend/data:/app/data   # partage le même fichier Excel
+    env_file:
+      - backend/.env               # même LLM_PROVIDER, OLLAMA_BASE_URL
+    environment:
+      FRAUD_SERVICE_PORT: "8001"
+    ports:
+      - "8001:8001"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+
   # ── Chatbot Django ─────────────────────────────────────────────────────────
   chatbot:
     build:
@@ -72,6 +95,7 @@ services:
       - backend/.env
     environment:
       REDIS_URL: redis://redis:6379/0
+      FRAUD_SERVICE_URL: http://fraud-service:8001 
     ports:
       - "8000:8000"
     depends_on:
@@ -81,6 +105,8 @@ services:
         condition: service_healthy
       keycloak:
         condition: service_started
+      fraud-service:
+        condition: service_healthy
     extra_hosts:
       - "host.docker.internal:host-gateway"
     command: >
@@ -114,6 +140,7 @@ services:
     depends_on:
       - chatbot
       - keycloak
+      - fraud-service
     restart: unless-stopped
 
 volumes:
