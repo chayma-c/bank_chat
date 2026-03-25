@@ -1,6 +1,6 @@
 # 🏦 BankChat — AI-Powered Banking Assistant
 
-An intelligent banking chatbot built with **Angular 21**, **Django 6**, **LangGraph** multi-agent orchestration, **Keycloak** authentication, and an **intelligent memory system** (Redis + PostgreSQL).
+An intelligent banking chatbot built with **Angular 21**, **Django 6**, **LangGraph** multi-agent orchestration, **Keycloak** authentication, a dedicated **fraud-detection microservice**, and an **intelligent memory system** (Redis + PostgreSQL).
 
 ## Architecture
 
@@ -17,6 +17,12 @@ An intelligent banking chatbot built with **Angular 21**, **Django 6**, **LangGr
 │   (auth)    │
 └─────────────┘
 ```
+
+### Fraud analysis service
+
+The fraud-analysis flow runs in a separate FastAPI service at `http://localhost:8001`.
+It reads the shared transaction dataset from `backend/data/transactions.xlsx`.
+Inside Docker, that folder is mounted to `/app/data`, so the file becomes `/app/data/transactions.xlsx`.
 
 ## Memory System Architecture
 
@@ -72,8 +78,12 @@ Services started:
 - PostgreSQL on `localhost:5432`
 - Redis on `localhost:6379`
 - Keycloak on `http://localhost:8080`
+- Fraud service on `http://localhost:8001`
 - Django backend on `http://localhost:8000`
 - Angular frontend on `http://localhost:4200`
+
+> The fraud service expects the source file at `backend/data/transactions.xlsx`.
+> In Docker, the compose file mounts `./backend/data:/app/data` so the service can read the file as `/app/data/transactions.xlsx`.
 
 ### 2) Start Ollama (on your host machine)
 
@@ -131,6 +141,35 @@ npm start
 
 ---
 
+## Fraud Detection Service & Data
+
+You can test the fraud microservice directly without going through the Django API.
+
+### Direct endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `http://localhost:8001/analyze` | POST | Direct fraud analysis |
+| `http://localhost:8001/health` | GET | Fraud service health check |
+
+### Transaction file lookup order
+
+The fraud loader checks the transaction file in this order:
+
+1. `FRAUD_DATA_DIR` if it is set
+2. `/app/data/transactions.xlsx` in Docker
+3. `backend/data/transactions.xlsx` in local development
+4. `backend/data/transactions.xls` or `backend/data/transactions.csv` as fallback
+
+### If you get “Transaction file not found”
+
+- Make sure `backend/data/transactions.xlsx` exists
+- Confirm Docker mounts `./backend/data:/app/data`
+- If you store the file elsewhere, set `FRAUD_DATA_DIR` to that directory
+- Restart the `fraud-service` container after moving the file
+
+---
+
 ## Project Structure
 
 ```
@@ -151,15 +190,7 @@ bank_chat/
 │   │   ├── graph/
 │   │   │   ├── state.py
 │   │   │   ├── nodes.py          # LLM init (Ollama or Groq)
-│   │   │   ├── orchestrator.py
-│   │   │   └── fraud/            # Fraud detection sub-graph
-│   │   │       ├── graph.py
-│   │   │       ├── nodes.py
-│   │   │       ├── state.py
-│   │   │       ├── loader.py
-│   │   │       ├── rules.py
-│   │   │       ├── scoring.py
-│   │   │       └── report.py
+│   │   │   └── orchestrator.py
 │   │   ├── management/
 │   │   │   └── commands/
 │   │   │       └── archive_messages.py   # ← archiving command
@@ -173,7 +204,22 @@ bank_chat/
 │   │   ├── views.py
 │   │   ├── urls.py
 │   │   └── requirements.txt
+│   ├── data/
+│   │   ├── transactions.xlsx         # shared dataset for fraud analysis
+│   │   └── reports/
 │   └── manage.py
+├── fraud-service/
+│   ├── Dockerfile
+│   ├── main.py
+│   ├── requirements.txt
+│   └── fraud/
+│       ├── graph.py
+│       ├── loader.py
+│       ├── nodes.py
+│       ├── report.py
+│       ├── rules.py
+│       ├── scoring.py
+│       └── state.py
 └── frontend/
     └── src/
         ├── environments/
@@ -217,6 +263,8 @@ bank_chat/
 | `OLLAMA_MODEL` | Ollama model name | `llama3.2` |
 | `GROQ_API_KEY` | Groq API key (if provider=groq) | — |
 | `GROQ_MODEL` | Groq model name | `llama-3.3-70b-versatile` |
+| `FRAUD_SERVICE_URL` | Direct fraud service URL | `http://fraud-service:8001` |
+| `FRAUD_DATA_DIR` | Optional override for the transaction file directory | `/app/data` |
 | `KEYCLOAK_URL` | Keycloak server URL | `http://keycloak:8080` |
 | `KEYCLOAK_REALM` | Keycloak realm name | `myrealm` |
 | `KEYCLOAK_CLIENT_ID` | Keycloak client ID | `bank_chat` |
@@ -357,6 +405,9 @@ docker compose up -d --build
 # View backend logs
 docker logs bank_chat_backend -f
 
+# View fraud service logs
+docker logs bank_chat_fraud -f
+
 # View Redis cache keys
 docker exec -it bank_chat_redis redis-cli KEYS "bankchat*"
 
@@ -366,6 +417,9 @@ docker exec -it bank_chat_db psql -U postgres -d bank_chat -c \
 
 # Manual archiving inside Docker
 docker exec bank_chat_backend python manage.py archive_messages
+
+# Rebuild only the fraud service after changing loader or rules
+docker compose up -d --build fraud-service
 ```
 
 ---
@@ -382,6 +436,13 @@ docker exec bank_chat_backend python manage.py archive_messages
 | `/api/v1/chatbot/conversations/<session_id>/` | DELETE | Delete + invalidate Redis cache |
 | `/api/v1/chatbot/health/` | GET | Health check |
 
+### Direct fraud-service endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `http://localhost:8001/analyze` | POST | Direct fraud analysis |
+| `http://localhost:8001/health` | GET | Service health check |
+
 ---
 
 ## Running All Services (local dev — 3 terminals)
@@ -392,3 +453,13 @@ docker exec bank_chat_backend python manage.py archive_messages
 | 2 | `docker compose up -d` | PG + Redis + Keycloak |
 | 3 | `cd backend && python manage.py runserver` | Django API (http://localhost:8000) |
 | 4 | `cd frontend && npm start` | Angular (http://localhost:4200) |
+
+---
+
+## Troubleshooting
+
+| Problem | Cause | Fix |
+|---------|-------|-----|
+| `Transaction file not found` in fraud analysis | `backend/data/transactions.xlsx` is missing or not mounted | Make sure the file exists and the `fraud-service` volume points to it |
+| Fraud analysis returns no transactions for an IBAN | The IBAN does not exist in the spreadsheet | Check the IBAN format and the contents of `transactions.xlsx` |
+| `403 Forbidden` on authenticated requests | Token audience mismatch | Add or verify the Keycloak audience mapper for `bank_chat` |
