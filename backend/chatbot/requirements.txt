@@ -1,18 +1,12 @@
-# ── Django ────────────────────────────────────────────────────────────────────
-django>=4.2,<5.0
-djangorestframework>=3.14
-django-cors-headers>=4.3
-psycopg2-binary>=2.9
- 
-# ── LangChain ecosystem — versions épinglées pour compatibilité ───────────────
-# Compatibilité vérifiée : langchain 0.3.x + langgraph 0.2.x
-langchain>=0.3.0,<0.4.0
-langchain-core>=0.3.0,<0.4.0
-langchain-groq>=0.2.0,<0.3.0
-langchain-ollama>=0.2.0,<0.3.0
-langgraph>=0.2.0,<0.3.0
- 
-# ── MCP adapters — version flexible car souvent source de conflits ────────────
+django>=4.2
+djangorestframework
+django-cors-headers
+psycopg2-binary
+langchain
+langchain-core
+langchain-groq
+langgraph
+langchain-ollama
 langchain-mcp-adapters
  
 # ── Cache Redis ───────────────────────────────────────────────────────────────
