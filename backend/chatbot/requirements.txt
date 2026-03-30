@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # ── Django ────────────────────────────────────────────────────────────────────
 django>=4.2,<5.0
 djangorestframework>=3.14
@@ -13,6 +14,17 @@ langchain-ollama>=0.2.0,<0.3.0
 langgraph>=0.2.0,<0.3.0
  
 # ── MCP adapters — version flexible car souvent source de conflits ────────────
+=======
+django>=4.2
+djangorestframework
+django-cors-headers
+psycopg2-binary
+langchain
+langchain-core
+langchain-groq
+langgraph
+langchain-ollama
+>>>>>>> d26648462af413f1111d7384b4aca34b7ba7850a
 langchain-mcp-adapters
  
 # ── Cache Redis ───────────────────────────────────────────────────────────────

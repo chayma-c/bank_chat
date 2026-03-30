@@ -93,28 +93,55 @@ SYSTEM_PROMPTS = {
 def detect_intent(state: BankChatState) -> BankChatState:
     last_msg = state["messages"][-1].content
 
+    # ── Règle 1 : détection par regex AVANT le LLM (plus fiable) ──────────────
+    import re
+    msg_lower = last_msg.lower()
+
+    # Mots-clés fraud très spécifiques → bypass LLM
+    FRAUD_KEYWORDS = [
+        "fraude", "fraud", "anomalie", "anomal", "suspect",
+        "iban_", "blanchiment", "aml", "tracfin", "risque",
+        "analyse les", "vérifie", "verif", "check suspicious",
+        "transaction suspecte", "detect", "export transaction",
+    ]
+    # Détecter aussi un IBAN réel (FR + chiffres)
+    IBAN_PATTERN = re.compile(r'\b(IBAN_\w+|[A-Z]{2}\d{2}[\w\s]{10,30})\b', re.IGNORECASE)
+
+    if any(kw in msg_lower for kw in FRAUD_KEYWORDS) or IBAN_PATTERN.search(last_msg):
+        print(f"🧠 Detected intent: fraud (keyword match from: '{last_msg[:80]}')")
+        return {**state, "intent": "fraud"}
+
+    # ── Règle 2 : LLM pour les cas ambigus ────────────────────────────────────
     prompt = (
-        "You are a banking intent classifier. "
-        "Read the customer message below and reply with ONLY one word from this list:\n"
-        "  account   → balance, statements, account info, account details\n"
-        "  transfer  → send money, wire, payment, beneficiary\n"
-        "  support   → problem, card blocked, complaint, help, technical issue\n"
-        "  fraud     → fraud detection, suspicious activity, IBAN analysis, anomaly check, "
-        "AML, blanchiment, export transactions, analyse fraude, vérifier fraude, "
-        "detect fraud, check fraud, weird behaviour, suspicious transactions, "
-        "transaction analysis, risque, risk analysis, IBAN_\n"
-        "  fallback  → anything else\n\n"
-        f"Customer message: {last_msg}\n"
-        "Reply with one word only."
+        "You are a strict banking intent classifier. "
+        "Reply with EXACTLY one word, nothing else, no punctuation.\n\n"
+        "Rules:\n"
+        "- account   → balance, statement, account info\n"
+        "- transfer  → send money, wire transfer, payment to someone\n"
+        "- support   → card blocked, complaint, technical problem, help\n"
+        "- fraud     → fraud, suspicious, anomaly, IBAN analysis, AML, risk\n"
+        "- fallback  → anything else\n\n"
+        f"Message: {last_msg}\n\n"
+        "Your answer (one word only):"
     )
 
     response = llm.invoke(prompt)
     intent   = response.content.strip().lower().split()[0]
 
+<<<<<<< HEAD
     if intent not in ("account", "transfer", "support", "fraud"):
         intent = "fallback"
 
     print(f"🧠 Detected intent: {intent} (from: '{last_msg[:80]}...')")
+=======
+    # Nettoyer la réponse du LLM (enlever ponctuation)
+    intent = re.sub(r'[^a-z]', '', intent)
+
+    if intent not in ("account", "transfer", "support", "fraud"):
+        intent = "fallback"
+
+    print(f"🧠 Detected intent: {intent} (LLM from: '{last_msg[:80]}')")
+>>>>>>> d26648462af413f1111d7384b4aca34b7ba7850a
     return {**state, "intent": intent}
 
 
@@ -156,6 +183,7 @@ def handle_fallback(state: BankChatState) -> BankChatState:
 
 def stream_agent_response(intent: str, messages: list):
     """
+<<<<<<< HEAD
     Yields (token, agent_key) tuples.
     Pour le fraud intent : appel HTTP au fraud-service (pas de streaming token par token).
     Pour les autres agents : streaming LLM natif.
@@ -191,20 +219,43 @@ def stream_agent_response(intent: str, messages: list):
             summary = "⏱️ Le service de fraude a mis trop de temps à répondre. Réessayez."
         except Exception as e:
             summary = f"❌ Erreur service de fraude : {str(e)}"
+=======
+    Yields text tokens from the LLM one by one.
+    Pour 'fraud' intent → lance le fraud sub-graph complet.
+    """
+
+    # ── Cas fraud : pipeline complet ────────────────────────────────────────
+    if intent == "fraud":
+        from .fraud.graph import run_fraud_agent
+        result = run_fraud_agent(messages=messages)
+        summary = result.get("llm_summary", "")
+
+        if not summary:
+            summary = "❌ Aucune transaction trouvée. Vérifiez l'IBAN fourni."
+>>>>>>> d26648462af413f1111d7384b4aca34b7ba7850a
 
         yield summary, "fraud_agent"
         return
 
+<<<<<<< HEAD
     # Agents classiques — streaming token par token
+=======
+    # ── Autres agents : streaming token par token ────────────────────────────
+>>>>>>> d26648462af413f1111d7384b4aca34b7ba7850a
     agent_key = {
         "account":  "account_agent",
         "transfer": "transfer_agent",
         "support":  "support_agent",
+<<<<<<< HEAD
     }.get(intent, "fallback")
+=======
+    }.get(intent, "fallback")   # ✅ fraud est géré AVANT, donc pas de risque
+>>>>>>> d26648462af413f1111d7384b4aca34b7ba7850a
 
     system = SystemMessage(content=SYSTEM_PROMPTS[agent_key])
     messages_with_system = [system] + list(messages)
 
     for chunk in llm.stream(messages_with_system):
-        if chunk.content:
-            yield chunk.content, agent_key
+        token = chunk.content
+        if token:
+            yield token, agent_key
