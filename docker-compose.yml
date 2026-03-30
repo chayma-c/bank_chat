@@ -7,7 +7,7 @@ services:
     environment:
       POSTGRES_DB: ${DB_NAME:-bank_chat}
       POSTGRES_USER: ${DB_USER:-postgres}
-      POSTGRES_PASSWORD: ${DB_PASSWORD:-postgresql}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-root}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     ports:
@@ -43,7 +43,7 @@ services:
       KC_DB: postgres
       KC_DB_URL: jdbc:postgresql://db:5432/${DB_NAME:-bank_chat}
       KC_DB_USERNAME: ${DB_USER:-postgres}
-      KC_DB_PASSWORD: ${DB_PASSWORD:-postgresql}
+      KC_DB_PASSWORD: ${DB_PASSWORD:-root}
     volumes:
       - ./keycloak/themes/mytheme:/opt/keycloak/themes/mytheme
       - ./keycloak/realm-export.json:/opt/keycloak/data/import/realm-export.json
@@ -77,7 +77,7 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')"]
       interval: 15s
       timeout: 5s
       retries: 3

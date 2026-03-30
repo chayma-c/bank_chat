@@ -77,7 +77,7 @@ import logging
 from typing import Optional
 from datetime import datetime, timedelta
 
-from django.core.cache import cache  # Django cache → Redis si configuré
+from django.core.cache import cache  # Django cache → Redis 
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, BaseMessage
 
 logger = logging.getLogger(__name__)
