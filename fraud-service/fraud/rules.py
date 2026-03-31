@@ -46,6 +46,38 @@ def _safe_col(df: pd.DataFrame, name: str, default=None):
 
 # ── Individual Rule Functions ─────────────────────────────────────────────────
 
+def _amount_col(df: pd.DataFrame) -> str:
+    """Return the name of the amount column, new schema first."""
+    for col in ("transaction_amount", "montant", "amount"):
+        if col in df.columns:
+            return col
+    return "transaction_amount"  # will be missing → handled by callers
+
+
+def _type_col(df: pd.DataFrame) -> str:
+    """Return the name of the transaction-type column."""
+    for col in ("transaction_type", "type_transaction", "type"):
+        if col in df.columns:
+            return col
+    return "transaction_type"
+
+
+def _iban_dest_col(df: pd.DataFrame) -> str:
+    """Return the destination-IBAN column name."""
+    for col in ("counterparty_iban", "compte_dest", "iban_dest"):
+        if col in df.columns:
+            return col
+    return "counterparty_iban"
+
+
+def _country_col(df: pd.DataFrame) -> str:
+    """Return the country column name (derived or raw)."""
+    for col in ("country", "pays_dest"):
+        if col in df.columns:
+            return col
+    return "country"
+
+
 def check_velocity_card(df: pd.DataFrame) -> Dict:
     """VELOCITY_CARD_1H: >5 card transactions in 1 hour."""
     results = []
@@ -53,7 +85,9 @@ def check_velocity_card(df: pd.DataFrame) -> Dict:
         return {"rule": "VELOCITY_CARD_1H", "triggered": False, "score": 0.0,
                 "details": "No timestamp column", "severity": "LOW"}
 
-    card_mask = _safe_col(df, "type_transaction", "").str.upper().isin(["DEBIT", "CREDIT", "CARD", "CB"])
+    type_col = _type_col(df)
+    card_types = ["DEBIT", "CREDIT", "CARD", "CB", "CARD_PAYMENT"]
+    card_mask = _safe_col(df, type_col, "").str.upper().isin(card_types)
     card_df = df[card_mask].sort_values("timestamp")
 
     if card_df.empty:
@@ -80,7 +114,7 @@ def check_velocity_card(df: pd.DataFrame) -> Dict:
 
 def check_structuring_smurfing(df: pd.DataFrame) -> Dict:
     """STRUCTURING_SMURFING: >20 deposits < €10k in 7 days."""
-    amount_col = "montant" if "montant" in df.columns else "amount"
+    amount_col = _amount_col(df)
     if amount_col not in df.columns or "timestamp" not in df.columns:
         return {"rule": "STRUCTURING_SMURFING", "triggered": False, "score": 0.0,
                 "details": "Missing required columns", "severity": "LOW"}
@@ -113,12 +147,13 @@ def check_structuring_smurfing(df: pd.DataFrame) -> Dict:
 
 def check_layering_cascade(df: pd.DataFrame) -> Dict:
     """LAYERING_CASCADE: cyclic transfers A→B→C→A within 48h."""
-    if "timestamp" not in df.columns or "compte_dest" not in df.columns:
+    dest_col = _iban_dest_col(df)
+    if "timestamp" not in df.columns or dest_col not in df.columns:
         return {"rule": "LAYERING_CASCADE", "triggered": False, "score": 0.0,
-                "details": "Missing timestamp/compte_dest columns", "severity": "LOW"}
+                "details": "Missing timestamp/counterparty_iban columns", "severity": "LOW"}
 
     sorted_df = df.sort_values("timestamp")
-    destinations = sorted_df["compte_dest"].astype(str).tolist()
+    destinations = sorted_df[dest_col].astype(str).tolist()
     timestamps = sorted_df["timestamp"].tolist()
 
     # Look for repeated destination within 48h window
@@ -165,7 +200,7 @@ def check_layering_cascade(df: pd.DataFrame) -> Dict:
 
 def check_ofac_sanctioned(df: pd.DataFrame) -> Dict:
     """OFAC_SANCTIONED: any transaction involving sanctioned country."""
-    country_col = "pays_dest" if "pays_dest" in df.columns else "country"
+    country_col = _country_col(df)
     if country_col not in df.columns:
         return {"rule": "OFAC_SANCTIONED", "triggered": False, "score": 0.0,
                 "details": "No country column found", "severity": "LOW"}
@@ -188,7 +223,7 @@ def check_ofac_sanctioned(df: pd.DataFrame) -> Dict:
 
 def check_round_amount_suspect(df: pd.DataFrame) -> Dict:
     """ROUND_AMOUNT_SUSPECT: amounts suspiciously close to regulatory thresholds."""
-    amount_col = "montant" if "montant" in df.columns else "amount"
+    amount_col = _amount_col(df)
     if amount_col not in df.columns:
         return {"rule": "ROUND_AMOUNT_SUSPECT", "triggered": False, "score": 0.0,
                 "details": "No amount column", "severity": "LOW"}
@@ -267,7 +302,7 @@ def check_geo_anomaly(df: pd.DataFrame) -> Dict:
 
 def check_high_value(df: pd.DataFrame) -> Dict:
     """HIGH_VALUE: transactions exceeding standard thresholds."""
-    amount_col = "montant" if "montant" in df.columns else "amount"
+    amount_col = _amount_col(df)
     if amount_col not in df.columns:
         return {"rule": "HIGH_VALUE", "triggered": False, "score": 0.0,
                 "details": "No amount column", "severity": "LOW"}
@@ -317,13 +352,17 @@ def check_remote_access(df: pd.DataFrame) -> Dict:
 
 
 def check_new_beneficiary_high_transfer(df: pd.DataFrame) -> Dict:
-    """NEW_BENEFICIARY: new beneficiary + immediate high transfer."""
-    new_ben_col = "nouveau_beneficiaire" if "nouveau_beneficiaire" in df.columns else None
-    amount_col = "montant" if "montant" in df.columns else "amount"
+    """
+    NEW_BENEFICIARY: detect high-value transfers to counterparties that appear
+    only once (proxy for a 'new' beneficiary), compared to mean transaction amount.
+    (Column 'nouveau_beneficiaire' no longer exists in the new CSV schema.)
+    """
+    amount_col = _amount_col(df)
+    dest_col   = _iban_dest_col(df)
 
-    if new_ben_col is None or amount_col not in df.columns:
+    if amount_col not in df.columns or dest_col not in df.columns:
         return {"rule": "NEW_BENEFICIARY_HIGH_TRANSFER", "triggered": False, "score": 0.0,
-                "details": "Missing columns", "severity": "LOW"}
+                "details": "Missing amount/IBAN columns", "severity": "LOW"}
 
     # Parse boolean-like column
     new_ben = df[new_ben_col].astype(str).str.lower().isin(["true", "1", "yes"])
