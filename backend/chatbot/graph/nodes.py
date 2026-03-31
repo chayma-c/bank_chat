@@ -128,20 +128,10 @@ def detect_intent(state: BankChatState) -> BankChatState:
     response = llm.invoke(prompt)
     intent   = response.content.strip().lower().split()[0]
 
-<<<<<<< HEAD
     if intent not in ("account", "transfer", "support", "fraud"):
         intent = "fallback"
 
     print(f"🧠 Detected intent: {intent} (from: '{last_msg[:80]}...')")
-=======
-    # Nettoyer la réponse du LLM (enlever ponctuation)
-    intent = re.sub(r'[^a-z]', '', intent)
-
-    if intent not in ("account", "transfer", "support", "fraud"):
-        intent = "fallback"
-
-    print(f"🧠 Detected intent: {intent} (LLM from: '{last_msg[:80]}')")
->>>>>>> d26648462af413f1111d7384b4aca34b7ba7850a
     return {**state, "intent": intent}
 
 
@@ -183,7 +173,6 @@ def handle_fallback(state: BankChatState) -> BankChatState:
 
 def stream_agent_response(intent: str, messages: list):
     """
-<<<<<<< HEAD
     Yields (token, agent_key) tuples.
     Pour le fraud intent : appel HTTP au fraud-service (pas de streaming token par token).
     Pour les autres agents : streaming LLM natif.
@@ -219,38 +208,16 @@ def stream_agent_response(intent: str, messages: list):
             summary = "⏱️ Le service de fraude a mis trop de temps à répondre. Réessayez."
         except Exception as e:
             summary = f"❌ Erreur service de fraude : {str(e)}"
-=======
-    Yields text tokens from the LLM one by one.
-    Pour 'fraud' intent → lance le fraud sub-graph complet.
-    """
-
-    # ── Cas fraud : pipeline complet ────────────────────────────────────────
-    if intent == "fraud":
-        from .fraud.graph import run_fraud_agent
-        result = run_fraud_agent(messages=messages)
-        summary = result.get("llm_summary", "")
-
-        if not summary:
-            summary = "❌ Aucune transaction trouvée. Vérifiez l'IBAN fourni."
->>>>>>> d26648462af413f1111d7384b4aca34b7ba7850a
 
         yield summary, "fraud_agent"
         return
 
-<<<<<<< HEAD
     # Agents classiques — streaming token par token
-=======
-    # ── Autres agents : streaming token par token ────────────────────────────
->>>>>>> d26648462af413f1111d7384b4aca34b7ba7850a
     agent_key = {
         "account":  "account_agent",
         "transfer": "transfer_agent",
         "support":  "support_agent",
-<<<<<<< HEAD
     }.get(intent, "fallback")
-=======
-    }.get(intent, "fallback")   # ✅ fraud est géré AVANT, donc pas de risque
->>>>>>> d26648462af413f1111d7384b4aca34b7ba7850a
 
     system = SystemMessage(content=SYSTEM_PROMPTS[agent_key])
     messages_with_system = [system] + list(messages)
