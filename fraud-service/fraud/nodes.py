@@ -151,7 +151,7 @@ def load_data(state: FraudAgentState) -> Dict:
         }
 
     except FileNotFoundError as e:
-        error_msg = f"❌ Fichier Excel introuvable : {str(e)}\n\nVérifiez que `/app/data/transactions.xlsx` existe."
+        error_msg = f"❌ Fichier de transactions introuvable : {str(e)}\n\nVérifiez que `/app/data/transactions.csv` existe."
         return {
             "transactions_raw":   [],
             "transactions_count": 0,
@@ -260,12 +260,12 @@ def generate_summary(state: FraudAgentState) -> Dict:
 
     # ── Résumé LLM fraud ──────────────────────────────────────────────────
     risk_emoji = {
-        "APPROVED": "🟢", "REVIEW": "🟡", "HOLD": "🟠", "BLOCK": "🔴"
+        "APPROVED": "🟢", "REVIEW": "🟡", "BLOCK": "🔴"
     }.get(state.get("risk_level", ""), "⚪")
 
     triggered_rules = [r for r in state.get("fraud_results", []) if r.get("triggered")]
     rules_text = "\n".join(
-        f"  - [{r['severity']}] {r['rule']}: {r['details']} (score: {r['score']})"
+        f"  - [{r['severity']}] {r['rule']}: {r['details']} (+{r.get('points', 0)} pts)"
         for r in triggered_rules
     ) if triggered_rules else "  Aucune règle déclenchée."
 
@@ -276,13 +276,14 @@ def generate_summary(state: FraudAgentState) -> Dict:
         "Génère un rapport concis et professionnel en français.\n\n"
         f"IBAN: {state['iban']}\n"
         f"Transactions: {state.get('transactions_count', 0)}\n"
-        f"Montant total: €{info.get('total_amount', 0)}\n"
+        f"Montant total: {info.get('total_amount', 0)}\n"
         f"Période: {info.get('date_range', 'N/A')}\n"
-        f"Pays: {info.get('countries', [])}\n\n"
-        f"Score comportemental: {state.get('score_behavioral', 0)}/130\n"
-        f"Score AML: {state.get('score_aml', 0)}/100\n"
+        f"Types de transaction: {info.get('transaction_types', {})}\n\n"
+        f"Score comportemental: {state.get('score_behavioral', 0)}/100\n"
+        f"Score AML (règles): {state.get('score_aml', 0)}/100\n"
         f"Score final: {state.get('score_final', 0)}/100\n"
         f"Niveau de risque: {state.get('risk_level', 'N/A')} {risk_emoji}\n"
+        f"  (Seuils: <30 APPROVED · 30–59 REVIEW · ≥60 BLOCK)\n"
         f"TRACFIN: {'OUI' if state.get('tracfin_required') else 'NON'}\n\n"
         f"Règles déclenchées:\n{rules_text}\n\n"
         "Génère un résumé avec : 1. Verdict global  2. Alertes  3. Recommandations"

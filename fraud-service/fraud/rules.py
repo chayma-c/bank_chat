@@ -1,475 +1,389 @@
 """
 Rule-based fraud detection engine.
-Implements all banking regulations and detection rules from the documentation:
-  - Velocity rules (card, wire, deposit)
-  - High-value thresholds
-  - AML / Smurfing / Structuring
-  - Layering cascade detection
-  - OFAC sanctioned countries
-  - Round-amount suspect detection
-  - Geofencing
-  - Remote access software detection
-  - Night-time transaction detection
+Implements the 8 rules defined in fraud-service/README.md, working with
+the current CSV schema:
+
+  transaction_amount, timestamp, geo_location, ip_address, merchant_mcc,
+  account_currentbalance, client_iban, counterparty_iban, transaction_type
+
+Each rule returns a dict:
+  {
+    "rule":      str,   # rule identifier
+    "triggered": bool,
+    "points":    int,   # points added to final score (0 when not triggered)
+    "details":   str,
+    "severity":  "LOW" | "MEDIUM" | "HIGH" | "CRITICAL"
+  }
+
+Point table (from README):
+  Large amount (>3000)                        → +20
+  Round/suspicious amount                     → +15
+  Client IBAN in suspicious list              → +20
+  Counterparty IBAN in suspicious list        → +15
+  Structuring pattern (3+ txs 850–950 in 24h)→ +25
+  Night transaction (00:00–05:00)             → +10
+  Foreign IP (185.230.x.x)                   → +15
+  Foreign IP + amount > 2000                  → +10 extra
+  High-risk MCC + amount > 1500               → +10
+  Amount > 80% of balance                     → +10
+  Same IBAN ≥ 3 alerts in 7 days             → +20  (skipped: no alert column)
 """
 
 import pandas as pd
-import numpy as np
 from datetime import timedelta
 from typing import List, Dict
 
 
-# ── Constants ─────────────────────────────────────────────────────────────────
-
-OFAC_COUNTRIES = {"RU", "IR", "KP", "SY", "VE"}
-
-SUSPECT_ROUND_AMOUNTS = [9_990, 9_950, 29_990, 49_990, 99_990]
-ROUND_THRESHOLD = 50  # within €50 of a suspicious threshold
-
-STRUCTURING_THRESHOLD = 10_000  # €10,000
-SMURFING_COUNT_WEEKLY = 20      # >20 deposits <10k€ per week
-VELOCITY_CARD_1H = 5            # >5 card txs per hour
-VELOCITY_WIRE_10M = 10          # >10 wires per 10 min
-HIGH_VALUE_CARD = 5_000
-HIGH_VALUE_WIRE = 15_000
-HIGH_VALUE_CHEQUE = 10_000
-GEO_DISTANCE_THRESHOLD = 1_000  # km
-
-REMOTE_SOFTWARE = {"anydesk", "teamviewer", "remotepc", "logmein"}
-
-
-def _safe_col(df: pd.DataFrame, name: str, default=None):
-    """Return column if exists, else a Series of defaults."""
-    if name in df.columns:
-        return df[name]
-    return pd.Series(default, index=df.index)
-
-
-# ── Individual Rule Functions ─────────────────────────────────────────────────
+# ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _amount_col(df: pd.DataFrame) -> str:
-    """Return the name of the amount column, new schema first."""
     for col in ("transaction_amount", "montant", "amount"):
         if col in df.columns:
             return col
-    return "transaction_amount"  # will be missing → handled by callers
+    return "transaction_amount"
 
 
 def _type_col(df: pd.DataFrame) -> str:
-    """Return the name of the transaction-type column."""
     for col in ("transaction_type", "type_transaction", "type"):
         if col in df.columns:
             return col
     return "transaction_type"
 
 
-def _iban_dest_col(df: pd.DataFrame) -> str:
-    """Return the destination-IBAN column name."""
-    for col in ("counterparty_iban", "compte_dest", "iban_dest"):
-        if col in df.columns:
-            return col
-    return "counterparty_iban"
+def _safe_amounts(df: pd.DataFrame) -> pd.Series:
+    col = _amount_col(df)
+    if col not in df.columns:
+        return pd.Series(dtype=float)
+    return pd.to_numeric(df[col], errors="coerce")
 
 
-def _country_col(df: pd.DataFrame) -> str:
-    """Return the country column name (derived or raw)."""
-    for col in ("country", "pays_dest"):
-        if col in df.columns:
-            return col
-    return "country"
+# ── Constants
+
+LARGE_AMOUNT_THRESHOLD = 3_000          # Rule 1 – large amount
+ROUND_AMOUNTS          = {999, 950, 1_999, 1_950, 9_999, 9_950}  # Rule 1 – round amounts
+SUSPICIOUS_IBANS: set  = set()          # Rule 2 – extend at config time if needed
+STRUCTURING_MIN        = 850            # Rule 3 – structuring band low
+STRUCTURING_MAX        = 950            # Rule 3 – structuring band high
+STRUCTURING_MIN_COUNT  = 3             # Rule 3 – min txs in 24h
+NIGHT_START            = 0             # Rule 4 – night hour start (inclusive)
+NIGHT_END              = 5             # Rule 4 – night hour end (exclusive)
+NIGHT_TYPES            = {"P2P_TRANSFER", "INTERNATIONAL_TRANSFER",
+                           "WIRE_TRANSFER", "SWIFT", "SEPA"}
+FOREIGN_IP_PREFIX      = "185.230"     # Rule 5 – foreign IP prefix
+FOREIGN_IP_AMOUNT      = 2_000         # Rule 5 – extra pts threshold
+HIGH_RISK_MCC          = {5541, 5999, 5311}  # Rule 6 – risky MCCs
+HIGH_RISK_MCC_AMOUNT   = 1_500         # Rule 6 – MCC amount threshold
+BALANCE_RATIO          = 0.80          # Rule 7 – amount vs balance ratio
 
 
-def check_velocity_card(df: pd.DataFrame) -> Dict:
-    """VELOCITY_CARD_1H: >5 card transactions in 1 hour."""
-    results = []
-    if "timestamp" not in df.columns:
-        return {"rule": "VELOCITY_CARD_1H", "triggered": False, "score": 0.0,
-                "details": "No timestamp column", "severity": "LOW"}
+# ── Individual Rule Functions ─────────────────────────────────────────────────
 
-    type_col = _type_col(df)
-    card_types = ["DEBIT", "CREDIT", "CARD", "CB", "CARD_PAYMENT"]
-    card_mask = _safe_col(df, type_col, "").str.upper().isin(card_types)
-    card_df = df[card_mask].sort_values("timestamp")
+def check_large_or_round_amount(df: pd.DataFrame) -> Dict:
+    """
+    Rule 1 – Large or unusual transaction amount.
+    +20 pts if any transaction > 3,000
+    +15 pts if any transaction is a suspicious round number
+    """
+    amounts = _safe_amounts(df)
+    if amounts.empty:
+        return {"rule": "LARGE_OR_ROUND_AMOUNT", "triggered": False, "points": 0,
+                "details": "No amount data", "severity": "LOW"}
 
-    if card_df.empty:
-        return {"rule": "VELOCITY_CARD_1H", "triggered": False, "score": 0.0,
-                "details": "No card transactions found", "severity": "LOW"}
+    pts = 0
+    details_parts = []
 
-    # Rolling 1h window count
-    card_df = card_df.set_index("timestamp")
-    hourly_counts = card_df.resample("1h").size()
-    max_count = int(hourly_counts.max()) if not hourly_counts.empty else 0
+    large_mask = amounts > LARGE_AMOUNT_THRESHOLD
+    large_count = int(large_mask.sum())
+    if large_count > 0:
+        pts += 20
+        details_parts.append(
+            f"{large_count} transaction(s) > {LARGE_AMOUNT_THRESHOLD:,} "
+            f"(max: {amounts[large_mask].max():,.2f})"
+        )
 
-    triggered = max_count > VELOCITY_CARD_1H
-    score = min(1.0, 0.5 + 0.1 * (max_count - VELOCITY_CARD_1H)) if triggered else 0.0
-    severity = "HIGH" if triggered else "LOW"
+    # Round/suspicious amounts – nearest-integer check
+    round_mask = amounts.dropna().apply(lambda x: round(x) in ROUND_AMOUNTS)
+    round_count = int(round_mask.sum())
+    if round_count > 0:
+        pts += 15
+        details_parts.append(f"{round_count} suspicious round amounts")
 
+    triggered = pts > 0
     return {
-        "rule": "VELOCITY_CARD_1H",
+        "rule":      "LARGE_OR_ROUND_AMOUNT",
         "triggered": triggered,
-        "score": round(score, 2),
-        "details": f"Max {max_count} card transactions in 1h window (threshold: {VELOCITY_CARD_1H})",
-        "severity": severity,
+        "points":    pts,
+        "details":   " | ".join(details_parts) if details_parts else "No large/round amounts",
+        "severity":  "HIGH" if pts >= 30 else "MEDIUM" if triggered else "LOW",
     }
 
 
-def check_structuring_smurfing(df: pd.DataFrame) -> Dict:
-    """STRUCTURING_SMURFING: >20 deposits < €10k in 7 days."""
-    amount_col = _amount_col(df)
-    if amount_col not in df.columns or "timestamp" not in df.columns:
-        return {"rule": "STRUCTURING_SMURFING", "triggered": False, "score": 0.0,
-                "details": "Missing required columns", "severity": "LOW"}
+def check_suspicious_iban(df: pd.DataFrame) -> Dict:
+    """
+    Rule 2 – High-risk IBAN pattern.
+    +20 pts if client_iban is in SUSPICIOUS_IBANS
+    +15 pts if counterparty_iban is in SUSPICIOUS_IBANS
+    """
+    if not SUSPICIOUS_IBANS:
+        return {"rule": "SUSPICIOUS_IBAN", "triggered": False, "points": 0,
+                "details": "No suspicious IBANs configured", "severity": "LOW"}
 
-    amounts = pd.to_numeric(df[amount_col], errors="coerce")
-    small_deposits = df[(amounts > 0) & (amounts < STRUCTURING_THRESHOLD)].copy()
+    pts = 0
+    details_parts = []
 
-    if small_deposits.empty:
-        return {"rule": "STRUCTURING_SMURFING", "triggered": False, "score": 0.0,
-                "details": "No small deposits found", "severity": "LOW"}
+    if "client_iban" in df.columns:
+        hits = df["client_iban"].astype(str).str.upper().isin(
+            {i.upper() for i in SUSPICIOUS_IBANS}
+        )
+        if hits.any():
+            pts += 20
+            details_parts.append(f"Client IBAN suspicious ({int(hits.sum())} tx)")
 
-    # Group by week (ISO week)
-    small_deposits = small_deposits.copy()
-    small_deposits["week"] = small_deposits["timestamp"].dt.isocalendar().week
-    weekly_counts = small_deposits.groupby("week").size()
-    max_weekly = int(weekly_counts.max())
+    if "counterparty_iban" in df.columns:
+        hits_cp = df["counterparty_iban"].astype(str).str.upper().isin(
+            {i.upper() for i in SUSPICIOUS_IBANS}
+        )
+        if hits_cp.any():
+            pts += 15
+            details_parts.append(f"Counterparty IBAN suspicious ({int(hits_cp.sum())} tx)")
 
-    triggered = max_weekly > SMURFING_COUNT_WEEKLY
-    score = min(1.0, 0.6 + 0.02 * (max_weekly - SMURFING_COUNT_WEEKLY)) if triggered else 0.0
-    severity = "CRITICAL" if triggered else "LOW"
-
+    triggered = pts > 0
     return {
-        "rule": "STRUCTURING_SMURFING",
+        "rule":      "SUSPICIOUS_IBAN",
         "triggered": triggered,
-        "score": round(score, 2),
-        "details": f"Max {max_weekly} deposits <€10k in one week (threshold: {SMURFING_COUNT_WEEKLY})",
-        "severity": severity,
+        "points":    pts,
+        "details":   " | ".join(details_parts) if details_parts else "No suspicious IBANs",
+        "severity":  "CRITICAL" if pts >= 30 else "HIGH" if triggered else "LOW",
     }
 
 
-def check_layering_cascade(df: pd.DataFrame) -> Dict:
-    """LAYERING_CASCADE: cyclic transfers A→B→C→A within 48h."""
-    dest_col = _iban_dest_col(df)
-    if "timestamp" not in df.columns or dest_col not in df.columns:
-        return {"rule": "LAYERING_CASCADE", "triggered": False, "score": 0.0,
-                "details": "Missing timestamp/counterparty_iban columns", "severity": "LOW"}
+def check_structuring(df: pd.DataFrame) -> Dict:
+    """
+    Rule 3 – Structured / layered transactions (AML structuring).
+    Flag if, within any 24-hour window, the same client_iban has
+    ≥ 3 transactions with amounts in [850, 950].
+    +25 pts if triggered.
+    """
+    amounts = _safe_amounts(df)
+    if amounts.empty or "timestamp" not in df.columns:
+        return {"rule": "STRUCTURING", "triggered": False, "points": 0,
+                "details": "Missing amount/timestamp data", "severity": "LOW"}
 
-    sorted_df = df.sort_values("timestamp")
-    destinations = sorted_df[dest_col].astype(str).tolist()
-    timestamps = sorted_df["timestamp"].tolist()
+    iban_col = "client_iban" if "client_iban" in df.columns else None
 
-    # Look for repeated destination within 48h window
-    cycle_detected = False
-    partial_cycle = False
+    band_mask = amounts.between(STRUCTURING_MIN, STRUCTURING_MAX)
+    band_df = df[band_mask].copy()
+    band_df["_amount"] = amounts[band_mask]
 
-    dest_seen = {}
-    for i, (dest, ts) in enumerate(zip(destinations, timestamps)):
-        if dest in dest_seen:
-            prev_ts = dest_seen[dest]
-            if hasattr(ts, 'timestamp') and hasattr(prev_ts, 'timestamp'):
-                delta = (ts - prev_ts)
-                if hasattr(delta, 'total_seconds') and delta.total_seconds() < 48 * 3600:
-                    cycle_detected = True
-                    break
+    if band_df.empty:
+        return {"rule": "STRUCTURING", "triggered": False, "points": 0,
+                "details": f"No transactions in {STRUCTURING_MIN}–{STRUCTURING_MAX} band",
+                "severity": "LOW"}
 
-        dest_seen[dest] = ts
+    band_df = band_df.sort_values("timestamp")
 
-    # Check for partial pattern: >10 internal transfers per day
-    if "timestamp" in sorted_df.columns:
-        daily_counts = sorted_df.set_index("timestamp").resample("1D").size()
-        if not daily_counts.empty and daily_counts.max() > 10:
-            partial_cycle = True
+    # Slide a 24h window per IBAN (or globally if no IBAN col)
+    groups = band_df.groupby(iban_col) if iban_col else [("_all", band_df)]
+    max_count = 0
+    flagged_iban = None
 
-    if cycle_detected:
-        score, severity = 0.90, "CRITICAL"
-    elif partial_cycle:
-        score, severity = 0.55, "HIGH"
-    else:
-        score, severity = 0.0, "LOW"
+    for iban_val, grp in groups:
+        grp = grp.sort_values("timestamp")
+        ts_list = grp["timestamp"].tolist()
+        window = timedelta(hours=24)
+        for i, start_ts in enumerate(ts_list):
+            count = sum(
+                1 for ts in ts_list[i:]
+                if (ts - start_ts) <= window
+            )
+            if count > max_count:
+                max_count = count
+                flagged_iban = iban_val
+
+    triggered = max_count >= STRUCTURING_MIN_COUNT
+    pts = 25 if triggered else 0
 
     return {
-        "rule": "LAYERING_CASCADE",
-        "triggered": cycle_detected or partial_cycle,
-        "score": score,
-        "details": (
-            "Full cycle detected (A→B→A <48h)" if cycle_detected
-            else "Partial layering pattern (>10 txs/day)" if partial_cycle
-            else "No layering pattern detected"
+        "rule":      "STRUCTURING",
+        "triggered": triggered,
+        "points":    pts,
+        "details":   (
+            f"Max {max_count} transactions in {STRUCTURING_MIN}–{STRUCTURING_MAX} "
+            f"within 24h (IBAN: {str(flagged_iban)[:20]}…)"
+            if triggered else "No structuring pattern detected"
         ),
-        "severity": severity,
-    }
-
-
-def check_ofac_sanctioned(df: pd.DataFrame) -> Dict:
-    """OFAC_SANCTIONED: any transaction involving sanctioned country."""
-    country_col = _country_col(df)
-    if country_col not in df.columns:
-        return {"rule": "OFAC_SANCTIONED", "triggered": False, "score": 0.0,
-                "details": "No country column found", "severity": "LOW"}
-
-    countries = df[country_col].astype(str).str.upper().str.strip()
-    ofac_hits = countries[countries.isin(OFAC_COUNTRIES)]
-    triggered = not ofac_hits.empty
-
-    return {
-        "rule": "OFAC_SANCTIONED",
-        "triggered": triggered,
-        "score": 1.0 if triggered else 0.0,
-        "details": (
-            f"Transactions to sanctioned countries: {ofac_hits.unique().tolist()}"
-            if triggered else "No OFAC-sanctioned countries detected"
-        ),
-        "severity": "CRITICAL" if triggered else "LOW",
-    }
-
-
-def check_round_amount_suspect(df: pd.DataFrame) -> Dict:
-    """ROUND_AMOUNT_SUSPECT: amounts suspiciously close to regulatory thresholds."""
-    amount_col = _amount_col(df)
-    if amount_col not in df.columns:
-        return {"rule": "ROUND_AMOUNT_SUSPECT", "triggered": False, "score": 0.0,
-                "details": "No amount column", "severity": "LOW"}
-
-    amounts = pd.to_numeric(df[amount_col], errors="coerce").dropna()
-    suspect_txs = []
-
-    for threshold in SUSPECT_ROUND_AMOUNTS:
-        matches = amounts[(amounts >= threshold - ROUND_THRESHOLD) & (amounts <= threshold)]
-        if not matches.empty:
-            suspect_txs.extend(matches.tolist())
-
-    triggered = len(suspect_txs) > 0
-
-    return {
-        "rule": "ROUND_AMOUNT_SUSPECT",
-        "triggered": triggered,
-        "score": 0.65 if triggered else 0.0,
-        "details": (
-            f"Found {len(suspect_txs)} transactions near regulatory thresholds: "
-            f"{[round(x, 2) for x in suspect_txs[:5]]}"
-            if triggered else "No suspicious round amounts"
-        ),
-        "severity": "HIGH" if triggered else "LOW",
+        "severity":  "CRITICAL" if triggered else "LOW",
     }
 
 
 def check_night_transactions(df: pd.DataFrame) -> Dict:
-    """Night-time transactions (00h-04h) — +20 pts in scoring."""
-    hour_col = "heure_jour" if "heure_jour" in df.columns else None
+    """
+    Rule 4 – Unusual hour / night transactions.
+    Flag P2P or international transfers between 00:00–05:00.
+    +10 pts if triggered.
+    """
+    if "timestamp" not in df.columns:
+        return {"rule": "NIGHT_TRANSACTIONS", "triggered": False, "points": 0,
+                "details": "No timestamp data", "severity": "LOW"}
 
-    if hour_col is None and "timestamp" in df.columns:
-        hours = df["timestamp"].dt.hour
-    elif hour_col:
-        hours = pd.to_numeric(df[hour_col], errors="coerce")
+    hours = df["timestamp"].dt.hour
+    night_mask = hours.between(NIGHT_START, NIGHT_END - 1, inclusive="both")
+
+    type_col = _type_col(df)
+    if type_col in df.columns:
+        type_mask = df[type_col].astype(str).str.upper().isin(NIGHT_TYPES)
+        flagged_mask = night_mask & type_mask
     else:
-        return {"rule": "NIGHT_TRANSACTIONS", "triggered": False, "score": 0.0,
-                "details": "No hour data available", "severity": "LOW"}
+        flagged_mask = night_mask
 
-    night_mask = hours.between(0, 4, inclusive="left")
-    night_count = int(night_mask.sum())
+    night_count = int(flagged_mask.sum())
     triggered = night_count > 0
+    pts = 10 if triggered else 0
 
     return {
-        "rule": "NIGHT_TRANSACTIONS",
+        "rule":      "NIGHT_TRANSACTIONS",
         "triggered": triggered,
-        "score": 0.3 if triggered else 0.0,
-        "details": f"{night_count} transactions between 00h-04h",
-        "severity": "MEDIUM" if triggered else "LOW",
-    }
-
-
-def check_geo_anomaly(df: pd.DataFrame) -> Dict:
-    """GEO_DISTANCE: distance > 1000km vs client's usual location."""
-    dist_col = "distance_geo_km" if "distance_geo_km" in df.columns else None
-    if dist_col is None:
-        return {"rule": "GEO_DISTANCE", "triggered": False, "score": 0.0,
-                "details": "No geolocation data", "severity": "LOW"}
-
-    distances = pd.to_numeric(df[dist_col], errors="coerce").dropna()
-    far_txs = distances[distances > GEO_DISTANCE_THRESHOLD]
-    triggered = not far_txs.empty
-
-    return {
-        "rule": "GEO_DISTANCE",
-        "triggered": triggered,
-        "score": 0.5 if triggered else 0.0,
-        "details": (
-            f"{len(far_txs)} transactions from >{GEO_DISTANCE_THRESHOLD}km away "
-            f"(max: {round(float(far_txs.max()), 0)}km)"
-            if triggered else "All transactions within normal geographic range"
+        "points":    pts,
+        "details":   (
+            f"{night_count} suspicious transfer(s) between "
+            f"{NIGHT_START:02d}:00–{NIGHT_END:02d}:00"
+            if triggered else "No unusual night transactions"
         ),
-        "severity": "HIGH" if triggered else "LOW",
+        "severity":  "MEDIUM" if triggered else "LOW",
     }
 
 
-def check_high_value(df: pd.DataFrame) -> Dict:
-    """HIGH_VALUE: transactions exceeding standard thresholds."""
-    amount_col = _amount_col(df)
-    if amount_col not in df.columns:
-        return {"rule": "HIGH_VALUE", "triggered": False, "score": 0.0,
-                "details": "No amount column", "severity": "LOW"}
+def check_foreign_ip(df: pd.DataFrame) -> Dict:
+    """
+    Rule 5 – High-risk IP / geography.
+    +15 pts if IP starts with 185.230
+    +10 extra pts if that transaction also has amount > 2,000
+    """
+    if "ip_address" not in df.columns:
+        return {"rule": "FOREIGN_IP", "triggered": False, "points": 0,
+                "details": "No IP address column", "severity": "LOW"}
 
-    amounts = pd.to_numeric(df[amount_col], errors="coerce")
-    high = amounts[amounts >= HIGH_VALUE_CARD]
-    triggered = not high.empty
+    foreign_mask = df["ip_address"].astype(str).str.startswith(FOREIGN_IP_PREFIX)
+    foreign_count = int(foreign_mask.sum())
 
-    return {
-        "rule": "HIGH_VALUE",
-        "triggered": triggered,
-        "score": 0.4 if triggered else 0.0,
-        "details": (
-            f"{len(high)} high-value transactions (>€{HIGH_VALUE_CARD}), "
-            f"max: €{round(float(high.max()), 2)}"
-            if triggered else "No high-value transactions"
-        ),
-        "severity": "MEDIUM" if triggered else "LOW",
-    }
+    if foreign_count == 0:
+        return {"rule": "FOREIGN_IP", "triggered": False, "points": 0,
+                "details": f"No IPs matching {FOREIGN_IP_PREFIX}.*", "severity": "LOW"}
 
+    pts = 15
+    amounts = _safe_amounts(df)
+    extra_count = 0
 
-def check_remote_access(df: pd.DataFrame) -> Dict:
-    """REMOTE_ACCESS: detecting AnyDesk/TeamViewer during session."""
-    col = "logiciel_remote" if "logiciel_remote" in df.columns else None
-    if col is None:
-        return {"rule": "REMOTE_ACCESS", "triggered": False, "score": 0.0,
-                "details": "No remote software column", "severity": "LOW"}
+    if not amounts.empty:
+        high_amount_mask = amounts > FOREIGN_IP_AMOUNT
+        extra_count = int((foreign_mask & high_amount_mask).sum())
+        if extra_count > 0:
+            pts += 10
 
-    values = df[col].astype(str).str.lower().str.strip()
-    # Filter out None, nan, empty, "none"
-    remote_mask = values.apply(
-        lambda x: x not in ("none", "nan", "", "false", "null") and x in REMOTE_SOFTWARE
+    details = (
+        f"{foreign_count} foreign IP ({FOREIGN_IP_PREFIX}.x) transaction(s)"
+        + (f", {extra_count} also > {FOREIGN_IP_AMOUNT:,}" if extra_count > 0 else "")
     )
-    remote_count = int(remote_mask.sum())
-    triggered = remote_count > 0
 
     return {
-        "rule": "REMOTE_ACCESS",
-        "triggered": triggered,
-        "score": 0.8 if triggered else 0.0,
-        "details": (
-            f"Remote access software detected in {remote_count} transactions"
-            if triggered else "No remote access software detected"
-        ),
-        "severity": "CRITICAL" if triggered else "LOW",
+        "rule":      "FOREIGN_IP",
+        "triggered": True,
+        "points":    pts,
+        "details":   details,
+        "severity":  "HIGH" if pts >= 25 else "MEDIUM",
     }
 
 
-def check_new_beneficiary_high_transfer(df: pd.DataFrame) -> Dict:
+def check_high_risk_mcc(df: pd.DataFrame) -> Dict:
     """
-    NEW_BENEFICIARY: detect high-value transfers to counterparties that appear
-    only once (proxy for a 'new' beneficiary), compared to mean transaction amount.
-    (Column 'nouveau_beneficiaire' no longer exists in the new CSV schema.)
+    Rule 6 – Unusual merchant / MCC.
+    Flag transactions in MCC {5541, 5999, 5311} with amount > 1,500.
+    +10 pts if triggered.
     """
-    amount_col = _amount_col(df)
-    dest_col   = _iban_dest_col(df)
+    if "merchant_mcc" not in df.columns:
+        return {"rule": "HIGH_RISK_MCC", "triggered": False, "points": 0,
+                "details": "No MCC column", "severity": "LOW"}
 
-    if amount_col not in df.columns or dest_col not in df.columns:
-        return {"rule": "NEW_BENEFICIARY_HIGH_TRANSFER", "triggered": False, "score": 0.0,
-                "details": "Missing amount/IBAN columns", "severity": "LOW"}
+    amounts = _safe_amounts(df)
+    mcc_vals = pd.to_numeric(df["merchant_mcc"], errors="coerce")
 
-    # Parse boolean-like column
-    new_ben = df[new_ben_col].astype(str).str.lower().isin(["true", "1", "yes"])
-    amounts = pd.to_numeric(df[amount_col], errors="coerce")
-    mean_amount = amounts.mean()
+    mcc_mask = mcc_vals.isin(HIGH_RISK_MCC)
+    amount_mask = amounts > HIGH_RISK_MCC_AMOUNT if not amounts.empty else pd.Series(False, index=df.index)
+    flagged = mcc_mask & amount_mask
 
-    # New beneficiary + amount > 10x average
-    suspect_mask = new_ben & (amounts > mean_amount * 10)
-    suspect_count = int(suspect_mask.sum())
-    triggered = suspect_count > 0
+    flagged_count = int(flagged.sum())
+    triggered = flagged_count > 0
+    pts = 10 if triggered else 0
 
     return {
-        "rule": "NEW_BENEFICIARY_HIGH_TRANSFER",
+        "rule":      "HIGH_RISK_MCC",
         "triggered": triggered,
-        "score": 0.7 if triggered else 0.0,
-        "details": (
-            f"{suspect_count} transfers to new beneficiary exceeding 10x average (€{round(float(mean_amount), 2)})"
-            if triggered else "No suspicious new-beneficiary transfers"
+        "points":    pts,
+        "details":   (
+            f"{flagged_count} high-risk MCC transaction(s) "
+            f"(MCCs {sorted(HIGH_RISK_MCC)}) with amount > {HIGH_RISK_MCC_AMOUNT:,}"
+            if triggered else "No high-risk MCC pattern"
         ),
-        "severity": "HIGH" if triggered else "LOW",
+        "severity":  "MEDIUM" if triggered else "LOW",
     }
 
 
-def check_proxy_ip(df: pd.DataFrame) -> Dict:
-    """PROXY_IP: transactions through proxy/VPN."""
-    col = "ip_proxy" if "ip_proxy" in df.columns else None
-    if col is None:
-        return {"rule": "PROXY_IP", "triggered": False, "score": 0.0,
-                "details": "No proxy IP column", "severity": "LOW"}
+def check_balance_ratio(df: pd.DataFrame) -> Dict:
+    """
+    Rule 7 – Low-balance vs high-value transaction.
+    Flag if transaction_amount > 80% of account_currentbalance.
+    +10 pts if triggered.
+    """
+    amounts = _safe_amounts(df)
+    if amounts.empty or "account_currentbalance" not in df.columns:
+        return {"rule": "BALANCE_RATIO", "triggered": False, "points": 0,
+                "details": "Missing amount or balance data", "severity": "LOW"}
 
-    proxy_mask = df[col].astype(str).str.lower().isin(["true", "1", "yes"])
-    proxy_count = int(proxy_mask.sum())
-    triggered = proxy_count > 0
-
-    return {
-        "rule": "PROXY_IP",
-        "triggered": triggered,
-        "score": 0.4 if triggered else 0.0,
-        "details": f"{proxy_count} transactions via proxy/VPN" if triggered else "No proxy usage detected",
-        "severity": "MEDIUM" if triggered else "LOW",
-    }
-
-
-def check_login_failures(df: pd.DataFrame) -> Dict:
-    """LOGIN_FAILURES: excessive login failures (MFA fatigue)."""
-    col = "login_fails_1h" if "login_fails_1h" in df.columns else None
-    if col is None:
-        return {"rule": "LOGIN_FAILURES", "triggered": False, "score": 0.0,
-                "details": "No login failure column", "severity": "LOW"}
-
-    fails = pd.to_numeric(df[col], errors="coerce")
-    max_fails = int(fails.max()) if not fails.empty else 0
-    triggered = max_fails >= 5  # 5+ failures in 1h = suspicious
+    balances = pd.to_numeric(df["account_currentbalance"], errors="coerce")
+    valid = balances > 0
+    flagged = valid & (amounts > BALANCE_RATIO * balances)
+    flagged_count = int(flagged.sum())
+    triggered = flagged_count > 0
+    pts = 10 if triggered else 0
 
     return {
-        "rule": "LOGIN_FAILURES",
+        "rule":      "BALANCE_RATIO",
         "triggered": triggered,
-        "score": 0.5 if triggered else 0.0,
-        "details": f"Max {max_fails} login failures in 1h" if triggered else "Normal login activity",
-        "severity": "HIGH" if triggered else "LOW",
-    }
-
-
-def check_crypto_transactions(df: pd.DataFrame) -> Dict:
-    """CRYPTO: Fiat → Crypto transfers."""
-    col = "is_crypto" if "is_crypto" in df.columns else None
-    if col is None:
-        return {"rule": "CRYPTO_TRANSFER", "triggered": False, "score": 0.0,
-                "details": "No crypto column", "severity": "LOW"}
-
-    crypto_mask = df[col].astype(str).str.lower().isin(["true", "1", "yes"])
-    crypto_count = int(crypto_mask.sum())
-    triggered = crypto_count > 0
-
-    amount_col = "montant" if "montant" in df.columns else "amount"
-    total_crypto = 0.0
-    if triggered and amount_col in df.columns:
-        total_crypto = float(pd.to_numeric(df.loc[crypto_mask, amount_col], errors="coerce").sum())
-
-    return {
-        "rule": "CRYPTO_TRANSFER",
-        "triggered": triggered,
-        "score": 0.6 if (triggered and total_crypto > 5000) else 0.3 if triggered else 0.0,
-        "details": (
-            f"{crypto_count} crypto transactions totaling €{round(total_crypto, 2)}"
-            if triggered else "No cryptocurrency transactions"
+        "points":    pts,
+        "details":   (
+            f"{flagged_count} transaction(s) exceed {int(BALANCE_RATIO*100)}% of account balance"
+            if triggered else "No balance-drain pattern detected"
         ),
-        "severity": "HIGH" if (triggered and total_crypto > 5000) else "MEDIUM" if triggered else "LOW",
+        "severity":  "HIGH" if triggered else "LOW",
+    }
+
+
+def check_repeated_alerts(df: pd.DataFrame) -> Dict:
+    """
+    Rule 8 – Repeated alerts on the same IBAN.
+    Not applicable: the current CSV has no 'Alert Status & Type' column.
+    Returns 0 pts / not triggered (placeholder kept for completeness).
+    """
+    return {
+        "rule":      "REPEATED_ALERTS",
+        "triggered": False,
+        "points":    0,
+        "details":   "No alert-status column in current dataset (rule skipped)",
+        "severity":  "LOW",
     }
 
 
 # ── Master Rule Runner ────────────────────────────────────────────────────────
 
 ALL_RULES = [
-    check_velocity_card,
-    check_structuring_smurfing,
-    check_layering_cascade,
-    check_ofac_sanctioned,
-    check_round_amount_suspect,
+    check_large_or_round_amount,
+    check_suspicious_iban,
+    check_structuring,
     check_night_transactions,
-    check_geo_anomaly,
-    check_high_value,
-    check_remote_access,
-    check_new_beneficiary_high_transfer,
-    check_proxy_ip,
-    check_login_failures,
-    check_crypto_transactions,
+    check_foreign_ip,
+    check_high_risk_mcc,
+    check_balance_ratio,
+    check_repeated_alerts,
 ]
 
 
@@ -482,10 +396,10 @@ def run_all_rules(df: pd.DataFrame) -> List[Dict]:
             results.append(result)
         except Exception as e:
             results.append({
-                "rule": rule_fn.__name__,
+                "rule":      rule_fn.__name__,
                 "triggered": False,
-                "score": 0.0,
-                "details": f"Error: {str(e)}",
-                "severity": "LOW",
+                "points":    0,
+                "details":   f"Error: {str(e)}",
+                "severity":  "LOW",
             })
     return results

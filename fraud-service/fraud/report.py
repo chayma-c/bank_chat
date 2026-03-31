@@ -42,16 +42,16 @@ def generate_transaction_export(
         summary_data = {
             "Métrique": [
                 "IBAN", "Nombre total de transactions",
-                "Montant total (€)", "Montant moyen (€)",
-                "Montant max (€)", "Montant min (€)",
+                "Montant total", "Montant moyen",
+                "Montant max", "Montant min",
                 "Période", "Date d'export"
             ],
             "Valeur": [
                 iban, len(df),
-                round(pd.to_numeric(df.get("montant", pd.Series(dtype=float)), errors="coerce").sum(), 2),
-                round(pd.to_numeric(df.get("montant", pd.Series(dtype=float)), errors="coerce").mean(), 2),
-                round(pd.to_numeric(df.get("montant", pd.Series(dtype=float)), errors="coerce").max(), 2),
-                round(pd.to_numeric(df.get("montant", pd.Series(dtype=float)), errors="coerce").min(), 2),
+                round(pd.to_numeric(df.get("transaction_amount", pd.Series(dtype=float)), errors="coerce").sum(), 2),
+                round(pd.to_numeric(df.get("transaction_amount", pd.Series(dtype=float)), errors="coerce").mean(), 2),
+                round(pd.to_numeric(df.get("transaction_amount", pd.Series(dtype=float)), errors="coerce").max(), 2),
+                round(pd.to_numeric(df.get("transaction_amount", pd.Series(dtype=float)), errors="coerce").min(), 2),
                 f"{df['timestamp'].min()} → {df['timestamp'].max()}" if "timestamp" in df.columns else "N/A",
                 datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             ]
@@ -89,13 +89,14 @@ def generate_fraud_report(
         score_data = {
             "Métrique": [
                 "IBAN analysé",
-                "Score comportemental (0-130)",
-                "Score AML (0-100)",
+                "Score comportemental (0-100)",
+                "Score AML / règles (0-100)",
                 "Score final (0-100)",
                 f"Niveau de risque {risk_emoji}",
                 "Déclaration TRACFIN requise",
                 "Date d'analyse",
                 "Nombre de transactions analysées",
+                "Seuils: <30=APPROVED | 30-59=REVIEW | ≥60=BLOCK",
             ],
             "Valeur": [
                 iban,
@@ -106,6 +107,7 @@ def generate_fraud_report(
                 "OUI ⚠️" if tracfin_required else "NON",
                 datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 len(df),
+                "",
             ]
         }
         pd.DataFrame(score_data).to_excel(writer, sheet_name="Score Résumé", index=False)
@@ -114,11 +116,11 @@ def generate_fraud_report(
         rules_df = pd.DataFrame(rule_results)
         if not rules_df.empty:
             rules_df = rules_df.rename(columns={
-                "rule": "Règle",
+                "rule":      "Règle",
                 "triggered": "Déclenchée",
-                "score": "Score",
-                "details": "Détails",
-                "severity": "Sévérité",
+                "points":    "Points",
+                "details":   "Détails",
+                "severity":  "Sévérité",
             })
         rules_df.to_excel(writer, sheet_name="Règles de Détection", index=False)
 
@@ -138,27 +140,23 @@ def generate_fraud_report(
         df.to_excel(writer, sheet_name="Transactions", index=False)
 
         # ── Sheet 5: Flagged Transactions ──
-        # Transactions that triggered at least one rule
+        # Flagged = transactions that triggered the high-score rules
         flagged_indices = set()
-        amount_col = "montant" if "montant" in df.columns else "amount"
+        amount_col = "transaction_amount" if "transaction_amount" in df.columns else "amount"
 
         if amount_col in df.columns:
             amounts = pd.to_numeric(df[amount_col], errors="coerce")
-            flagged_indices.update(df[amounts >= 10_000].index.tolist())
+            flagged_indices.update(df[amounts > 3_000].index.tolist())
 
-        if "heure_jour" in df.columns:
-            hours = pd.to_numeric(df["heure_jour"], errors="coerce")
-            flagged_indices.update(df[hours.between(0, 3)].index.tolist())
+        if "timestamp" in df.columns:
+            hours = df["timestamp"].dt.hour
+            flagged_indices.update(df[hours.between(0, 4)].index.tolist())
 
-        if "distance_geo_km" in df.columns:
-            dist = pd.to_numeric(df["distance_geo_km"], errors="coerce")
-            flagged_indices.update(df[dist > 1000].index.tolist())
-
-        if "logiciel_remote" in df.columns:
-            remote = df["logiciel_remote"].astype(str).str.lower()
-            flagged_indices.update(
-                df[remote.isin(["anydesk", "teamviewer"])].index.tolist()
-            )
+        if "account_currentbalance" in df.columns and amount_col in df.columns:
+            amounts      = pd.to_numeric(df[amount_col], errors="coerce")
+            balances     = pd.to_numeric(df["account_currentbalance"], errors="coerce")
+            drain_mask   = (balances > 0) & (amounts > 0.8 * balances)
+            flagged_indices.update(df[drain_mask].index.tolist())
 
         if flagged_indices:
             flagged_df = df.loc[sorted(flagged_indices)]

@@ -1,157 +1,179 @@
 """
-Fraud scoring engine.
-Combines:
-  1. Behavioral signal scoring (0-130 pts)
-  2. AML rule scoring (0-100)
-  3. Final score = min(100, max(behavioral, AML))
+Fraud scoring engine — README-aligned implementation.
 
-Based on the banking standard scoring matrix.
+Scoring model (from fraud-service/README.md):
+  - Sum the 'points' from all triggered rules, capped at 100.
+  - Risk levels:
+      < 30   → LOW_RISK   (APPROVED)
+      30–59  → MEDIUM_RISK (REVIEW)
+      ≥ 60   → HIGH_RISK  (BLOCK)
+
+Public API (unchanged so nodes.py doesn't need edits):
+  compute_behavioral_score(df) → (int, list)   ← now delegates to rule points
+  compute_aml_score(rule_results) → int
+  compute_final_score(behavioral_pts, aml_score) → (int, str)
+  check_tracfin_required(rule_results, df) → bool
 """
 
 import pandas as pd
 from typing import Dict, List, Tuple
 
 
-# ── Behavioral Signal Points ──────────────────────────────────────────────────
-# (from documentation Section 5: SCORING MATRIX STANDARD BANQUE)
+# ── Scoring constants (README) ────────────────────────────────────────────────
+
+SCORE_CAP = 100
+
+# Risk thresholds (README §Risk Scoring System)
+THRESHOLD_HIGH   = 60   # ≥ 60 → HIGH_RISK / BLOCK
+THRESHOLD_MEDIUM = 30   # ≥ 30 → MEDIUM_RISK / REVIEW
+                        # < 30 → LOW_RISK / APPROVED
+
+
+# ── Main scorer ───────────────────────────────────────────────────────────────
+
+def compute_total_score(rule_results: List[Dict]) -> int:
+    """
+    Sum all 'points' from triggered rules, capped at SCORE_CAP (100).
+    This is the primary score from the README model.
+    """
+    total = sum(r.get("points", 0) for r in rule_results if r.get("triggered"))
+    return min(total, SCORE_CAP)
+
+
+def risk_level_from_score(score: int) -> str:
+    """Map a 0–100 score to a risk level string."""
+    if score >= THRESHOLD_HIGH:
+        return "BLOCK"
+    elif score >= THRESHOLD_MEDIUM:
+        return "REVIEW"
+    else:
+        return "APPROVED"
+
+
+# ── Compatibility shim for nodes.py (public API preserved) ───────────────────
 
 def compute_behavioral_score(df: pd.DataFrame) -> Tuple[int, List[Dict]]:
     """
-    Compute behavioral signal score (0 to ~130 pts theoretical max).
+    Behavioral signals extracted from the DataFrame.
 
-    Scoring:
-        Montant ≥ 10,000€  → +40 pts
-        00h-04h             → +20 pts
-        Pays étranger       → +30 pts
-        Vélocité rapide     → +25 pts
-        Marchand inconnu    → +15 pts
+    README-aligned signals (derived from available columns):
+      • Amount > 3,000         → +20 pts  (LARGE_AMOUNT)
+      • Night tx (00:00–05:00) → +10 pts  (NIGHT_TX)
+      • Foreign IP 185.230.x.x → +15 pts  (FOREIGN_IP)
+      • High-risk MCC + >1,500 → +10 pts  (HIGH_RISK_MCC)
+      • Amount > 80% balance   → +10 pts  (BALANCE_DRAIN)
     """
-    signals = []
+    signals: List[Dict] = []
     total_pts = 0
 
-    amount_col = "montant" if "montant" in df.columns else "amount"
+    # ── Amount helpers ────────────────────────────────────────────────────────
+    amount_col = next(
+        (c for c in ("transaction_amount", "montant", "amount") if c in df.columns),
+        None,
+    )
+    amounts = (
+        pd.to_numeric(df[amount_col], errors="coerce")
+        if amount_col else pd.Series(dtype=float)
+    )
 
-    # 1. High amount (≥ €10,000)
-    if amount_col in df.columns:
-        amounts = pd.to_numeric(df[amount_col], errors="coerce")
-        if (amounts >= 10_000).any():
-            total_pts += 40
-            signals.append({"signal": "MONTANT_ELEVE", "points": 40,
-                           "detail": f"Transactions ≥€10,000 detected"})
+    # 1. Large amount > 3,000
+    if not amounts.empty and (amounts > 3_000).any():
+        count = int((amounts > 3_000).sum())
+        total_pts += 20
+        signals.append({
+            "signal": "LARGE_AMOUNT",
+            "points": 20,
+            "detail": f"{count} transaction(s) > 3,000 (max: {amounts[amounts > 3_000].max():,.2f})",
+        })
 
-    # 2. Night-time (00h-04h)
-    if "heure_jour" in df.columns:
-        hours = pd.to_numeric(df["heure_jour"], errors="coerce")
-        if (hours.between(0, 3)).any():
-            total_pts += 20
-            signals.append({"signal": "HEURE_NUIT", "points": 20,
-                           "detail": "Transactions between 00h-04h"})
-    elif "timestamp" in df.columns:
+    # 2. Night transactions (00:00–05:00)
+    if "timestamp" in df.columns:
         hours = df["timestamp"].dt.hour
-        if (hours.between(0, 3)).any():
-            total_pts += 20
-            signals.append({"signal": "HEURE_NUIT", "points": 20,
-                           "detail": "Transactions between 00h-04h"})
+        night_count = int(hours.between(0, 4).sum())
+        if night_count > 0:
+            total_pts += 10
+            signals.append({
+                "signal": "NIGHT_TX",
+                "points": 10,
+                "detail": f"{night_count} transaction(s) between 00:00–05:00",
+            })
 
-    # 3. Foreign country
-    country_col = "pays_dest" if "pays_dest" in df.columns else "country"
-    if country_col in df.columns:
-        countries = df[country_col].astype(str).str.upper().str.strip()
-        # Assume TN (Tunisia) or FR (France) as home — flag others
-        local_countries = {"TN", "FR"}
-        foreign = countries[~countries.isin(local_countries) & (countries != "NAN")]
-        if not foreign.empty:
-            total_pts += 30
-            signals.append({"signal": "PAYS_ETRANGER", "points": 30,
-                           "detail": f"Foreign countries: {foreign.unique().tolist()}"})
-
-    # 4. High velocity
-    if "velocity_1h" in df.columns:
-        vel = pd.to_numeric(df["velocity_1h"], errors="coerce")
-        if (vel > 5).any():
-            total_pts += 25
-            signals.append({"signal": "VELOCITE_RAPIDE", "points": 25,
-                           "detail": f"Max velocity: {int(vel.max())} txs/h"})
-
-    # 5. Unknown merchant (new user agent)
-    if "user_agent_new" in df.columns:
-        unknown = df["user_agent_new"].astype(str).str.lower()
-        if unknown.isin(["unknown", "new", "true"]).any():
+    # 3. Foreign IP (185.230.x.x)
+    if "ip_address" in df.columns:
+        foreign_count = int(
+            df["ip_address"].astype(str).str.startswith("185.230").sum()
+        )
+        if foreign_count > 0:
             total_pts += 15
-            signals.append({"signal": "DEVICE_INCONNU", "points": 15,
-                           "detail": "Unknown/new device detected"})
+            signals.append({
+                "signal": "FOREIGN_IP",
+                "points": 15,
+                "detail": f"{foreign_count} transaction(s) from foreign IP (185.230.*)",
+            })
 
-    return total_pts, signals
+    # 4. High-risk MCC with amount > 1,500
+    if "merchant_mcc" in df.columns and not amounts.empty:
+        HIGH_RISK_MCC = {5541, 5999, 5311}
+        mcc = pd.to_numeric(df["merchant_mcc"], errors="coerce")
+        risky = (mcc.isin(HIGH_RISK_MCC)) & (amounts > 1_500)
+        risky_count = int(risky.sum())
+        if risky_count > 0:
+            total_pts += 10
+            signals.append({
+                "signal": "HIGH_RISK_MCC",
+                "points": 10,
+                "detail": f"{risky_count} high-risk MCC transaction(s) > 1,500",
+            })
 
+    # 5. Balance drain (amount > 80% of balance)
+    if "account_currentbalance" in df.columns and not amounts.empty:
+        balances = pd.to_numeric(df["account_currentbalance"], errors="coerce")
+        drain = (balances > 0) & (amounts > 0.80 * balances)
+        drain_count = int(drain.sum())
+        if drain_count > 0:
+            total_pts += 10
+            signals.append({
+                "signal": "BALANCE_DRAIN",
+                "points": 10,
+                "detail": f"{drain_count} transaction(s) exceed 80% of account balance",
+            })
 
-# ── AML Rule Score ────────────────────────────────────────────────────────────
+    return min(total_pts, SCORE_CAP), signals
+
 
 def compute_aml_score(rule_results: List[Dict]) -> int:
     """
-    Convert rule-based fraud results to AML score (0-100).
-    Takes the maximum rule score × 100.
+    Sum points from all triggered rules (README additive model), capped at 100.
+    This replaces the old "max rule score × 100" approach.
     """
-    if not rule_results:
-        return 0
+    return compute_total_score(rule_results)
 
-    max_score = max(r.get("score", 0.0) for r in rule_results)
-    return int(max_score * 100)
-
-
-# ── Final Composite Score ─────────────────────────────────────────────────────
 
 def compute_final_score(behavioral_pts: int, aml_score: int) -> Tuple[int, str]:
     """
-    Final score = min(100, max(behavioral, aml))
-    Based on RBA GAFI 2023.
-
-    Action thresholds:
-        0-29  → 🟢 APPROVED
-        30-49 → 🟡 REVIEW
-        50-69 → 🟠 HOLD
-        70-100→ 🔴 BLOCK
+    Final score = the higher of behavioral score and AML rule score, capped at 100.
+    Risk levels follow the README thresholds:
+      < 30  → APPROVED
+      30–59 → REVIEW
+      ≥ 60  → BLOCK
     """
-    score_final = min(100, max(behavioral_pts, aml_score))
-
-    if score_final >= 70:
-        risk_level = "BLOCK"
-    elif score_final >= 50:
-        risk_level = "HOLD"
-    elif score_final >= 30:
-        risk_level = "REVIEW"
-    else:
-        risk_level = "APPROVED"
-
+    score_final = min(SCORE_CAP, max(behavioral_pts, aml_score))
+    risk_level  = risk_level_from_score(score_final)
     return score_final, risk_level
 
 
-# ── TRACFIN Declaration Check ─────────────────────────────────────────────────
-
 def check_tracfin_required(rule_results: List[Dict], df: pd.DataFrame) -> bool:
     """
-    Check if TRACFIN declaration is mandatory.
-    Criteria:
-        □ > 20 dépôts < 10k€ / semaine
-        □ Cycle virements > 50k€ < 48h
-        □ Espèces > 15k€ sans justificatif
-        □ Client REFUSE KYC
+    TRACFIN declaration is required when risk is HIGH (score ≥ 60)
+    and at least one structuring or large-amount rule is triggered.
     """
+    total = compute_total_score(rule_results)
+    if total < THRESHOLD_HIGH:
+        return False
+
+    high_risk_rules = {"STRUCTURING", "LARGE_OR_ROUND_AMOUNT", "SUSPICIOUS_IBAN"}
     for r in rule_results:
-        if r["rule"] == "STRUCTURING_SMURFING" and r["triggered"]:
-            return True
-        if r["rule"] == "LAYERING_CASCADE" and r["score"] >= 0.9:
-            return True
-        if r["rule"] == "OFAC_SANCTIONED" and r["triggered"]:
-            return True
-
-    # Check large cash without justification
-    amount_col = "montant" if "montant" in df.columns else "amount"
-    justif_col = "justificatif_present" if "justificatif_present" in df.columns else None
-
-    if amount_col in df.columns and justif_col and justif_col in df.columns:
-        amounts = pd.to_numeric(df[amount_col], errors="coerce")
-        no_justif = df[justif_col].astype(str).str.lower().isin(["false", "0", "no", "none"])
-        if ((amounts > 15_000) & no_justif).any():
+        if r.get("rule") in high_risk_rules and r.get("triggered"):
             return True
 
     return False
