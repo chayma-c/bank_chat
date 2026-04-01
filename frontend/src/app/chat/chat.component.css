@@ -327,6 +327,7 @@
   border-radius: 14px;
   padding: 0.6rem 0.6rem 0.6rem 1rem;
   transition: border-color 0.2s;
+  cursor: text;
 }
 .input-box:focus-within { border-color: #2563eb; }
 

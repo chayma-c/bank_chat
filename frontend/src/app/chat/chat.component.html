@@ -169,8 +169,9 @@
 
     <!-- Input area -->
     <footer class="input-area">
-      <div class="input-box">
+      <div class="input-box" (click)="focusInput()">
         <textarea
+          #inputField
           class="input-field"
           rows="1"
           placeholder="Type your message…"

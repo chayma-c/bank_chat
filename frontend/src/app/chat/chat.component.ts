@@ -1,6 +1,6 @@
 import {
   Component, OnInit, AfterViewChecked,
-  ViewChild, ElementRef, signal, computed, inject, HostListener
+  ViewChild, ElementRef, signal, computed, inject, HostListener, effect
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
@@ -25,6 +25,7 @@ interface LocalMessage {
 export class ChatComponent implements OnInit, AfterViewChecked {
   @ViewChild('messagesEnd') private messagesEnd!: ElementRef;
   @ViewChild('messagesArea') private messagesArea?: ElementRef<HTMLElement>;
+  @ViewChild('inputField') private inputField?: ElementRef<HTMLTextAreaElement>;
 
   private stickToBottom = true;
   private readonly bottomThresholdPx = 48;
@@ -48,7 +49,20 @@ export class ChatComponent implements OnInit, AfterViewChecked {
 
   isNewChat = computed(() => this.messages().length === 0);
 
-  constructor(private chatService: ChatService) {}
+  constructor(private chatService: ChatService) {
+    // Auto-focus the input whenever the model finishes responding
+    effect(() => {
+      if (!this.sending()) {
+        // Use setTimeout to ensure the DOM has updated (textarea re-enabled)
+        setTimeout(() => this.focusInput(), 0);
+      }
+    });
+  }
+
+  /** Focus the textarea programmatically */
+  focusInput(): void {
+    this.inputField?.nativeElement?.focus();
+  }
 
   ngOnInit(): void {
     this.loadConversations();
