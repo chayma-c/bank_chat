@@ -36,11 +36,11 @@ export class ChatComponent implements OnInit, AfterViewChecked {
   readonly userInitial = this.keycloak.userInitial;
   readonly email = this.keycloak.email;
 
-  sessionId     = signal<string>(uuidv4());
-  messages      = signal<LocalMessage[]>([]);
-  userInput     = signal<string>('');
-  sending       = signal<boolean>(false);
-  sidebarOpen   = signal<boolean>(true);
+  sessionId = signal<string>(uuidv4());
+  messages = signal<LocalMessage[]>([]);
+  userInput = signal<string>('');
+  sending = signal<boolean>(false);
+  sidebarOpen = signal<boolean>(true);
   conversations = signal<Conversation[]>([]);
   activeSession = signal<string>('');
 
@@ -101,13 +101,13 @@ export class ChatComponent implements OnInit, AfterViewChecked {
   private scrollToBottom(): void {
     try {
       this.messagesEnd.nativeElement.scrollIntoView({ behavior: 'auto', block: 'end' });
-    } catch {}
+    } catch { }
   }
 
   loadConversations(): void {
     this.chatService.getConversations(this.userId).subscribe({
       next: (convs) => this.conversations.set(convs),
-      error: () => {}
+      error: () => { }
     });
   }
 
@@ -159,9 +159,9 @@ export class ChatComponent implements OnInit, AfterViewChecked {
     this.messages.update(msgs => [...msgs, { role: 'assistant', content: '', loading: true }]);
 
     this.chatService.streamMessage({
-      user_id:    this.userId,
+      user_id: this.userId,
       session_id: this.sessionId(),
-      message:    text
+      message: text
     }).subscribe({
       next: (evt) => {
         if (evt.error) {
@@ -181,7 +181,7 @@ export class ChatComponent implements OnInit, AfterViewChecked {
         if (evt.token) {
           this.messages.update(msgs => {
             const updated = [...msgs];
-            const last    = updated[updated.length - 1];
+            const last = updated[updated.length - 1];
             updated[updated.length - 1] = {
               ...last,
               content: last.content + evt.token,
@@ -194,7 +194,7 @@ export class ChatComponent implements OnInit, AfterViewChecked {
         if (evt.done) {
           this.messages.update(msgs => {
             const updated = [...msgs];
-            const last    = updated[updated.length - 1];
+            const last = updated[updated.length - 1];
             updated[updated.length - 1] = { ...last, agent_used: evt.agent, loading: false };
             return updated;
           });
@@ -206,7 +206,7 @@ export class ChatComponent implements OnInit, AfterViewChecked {
         this.messages.update(msgs => {
           const updated = [...msgs];
           updated[updated.length - 1] = {
-            role:    'assistant',
+            role: 'assistant',
             content: 'Erreur de connexion. Veuillez réessayer.',
             loading: false,
           };

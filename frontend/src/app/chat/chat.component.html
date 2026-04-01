@@ -119,7 +119,7 @@
     </header>
 
     <!-- Messages area -->
-    <section class="messages-area">
+    <section class="messages-area" #messagesArea (scroll)="onMessagesScroll()">
 
       @if (isNewChat()) {
         <!-- Welcome screen -->
