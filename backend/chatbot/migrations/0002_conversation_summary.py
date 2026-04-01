@@ -6,8 +6,9 @@ class Migration(migrations.Migration):
     dependencies = [
         ('chatbot', '0001_initial'),
     ]
- 
+    
     operations = [
+        #/!\ Nouvelle colonne pour stocker le résumé consolidé des messages archivés
         migrations.AddField(
             model_name='conversation',
             name='summary',
@@ -25,6 +26,7 @@ class Migration(migrations.Migration):
                 help_text='Nombre de messages supprimés lors des archivages'
             ),
         ),
+        #/!\ Nouvelle colonne pour suivre la date du dernier archivage
         migrations.AddField(
             model_name='conversation',
             name='last_archived_at',
