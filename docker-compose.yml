@@ -129,6 +129,25 @@ services:
       "
     restart: unless-stopped
 
+ # ── API Gateway — Nginx ────────────────────────────────────────────────────
+  api-gateway:
+    build:
+      context: ./api-gateway
+      dockerfile: Dockerfile
+    container_name: bank_chat_gateway
+    ports:
+      - "80:80"         # seule URL exposée au frontend
+    depends_on:
+      - orchestrateur
+      - fraud-service
+      - keycloak
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O-", "http://localhost/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+
   # ── Frontend Angular ───────────────────────────────────────────────────────
   frontend:
     build:
@@ -138,9 +157,7 @@ services:
     ports:
       - "4200:80"
     depends_on:
-      - orchestrateur
-      - keycloak
-      - fraud-service
+      - api-gateway
     restart: unless-stopped
 
 volumes:

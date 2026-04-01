@@ -79,7 +79,8 @@ Services started:
 - Redis on `localhost:6379`
 - Keycloak on `http://localhost:8080`
 - Fraud service on `http://localhost:8001`
-- Django backend on `http://localhost:8000`
+- API Gateway on `http://localhost:80` (Entry point for all APIs)
+- Orchestrateur on `http://orchestrateur:8000` (Internal)
 - Angular frontend on `http://localhost:4200`
 
 > The fraud service expects the source file at `backend/data/transactions.xlsx`.
