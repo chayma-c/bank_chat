@@ -1,0 +1,71 @@
+<aside class="sidebar">
+    <div class="sidebar-header">
+        <div class="brand-row">
+            <div class="logo-box">
+                <span class="material-symbols-outlined logo-icon">security</span>
+            </div>
+            <h1 class="app-title">{{ appTitle }}</h1>
+        </div>
+        <p class="subtitle">Clinical Authority</p>
+    </div>
+
+    <nav class="nav-menu">
+        <a *ngFor="let item of menuItems" href="#" class="nav-item" [ngClass]="{ 'nav-item-active': item.active }">
+            <span class="material-symbols-outlined">{{ item.icon }}</span>
+            <span>{{ item.label }}</span>
+        </a>
+    </nav>
+</aside>
+
+<main class="main-content">
+    <header class="top-header">
+        <div class="search-box">
+            <span class="material-symbols-outlined search-icon">search</span>
+            <input [(ngModel)]="searchQuery" type="text" placeholder="Search accounts, rules, or hash..."
+                class="search-input" />
+        </div>
+    </header>
+
+    <div class="dashboard-wrapper">
+        <div class="page-header">
+            <div>
+                <span class="page-label">System Pulse</span>
+                <h2 class="page-title">Intelligence Dashboard</h2>
+            </div>
+        </div>
+
+        <div class="metrics-grid">
+            <div *ngFor="let metric of metrics" class="metric-card">
+                <p class="metric-label">{{ metric.label }}</p>
+                <h3 class="metric-value">{{ metric.value }}</h3>
+                <p class="metric-subtext">{{ metric.subtext }}</p>
+            </div>
+        </div>
+
+        <section class="table-section">
+            <div class="table-header">
+                <h4>Active Investigations</h4>
+            </div>
+
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>Transaction ID</th>
+                        <th>Entity</th>
+                        <th>Risk Score</th>
+                        <th>Trigger</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+                    <tr *ngFor="let item of investigations">
+                        <td>{{ item.id }}</td>
+                        <td>{{ item.name }}</td>
+                        <td>{{ item.score }}</td>
+                        <td>{{ item.trigger }}</td>
+                    </tr>
+                </tbody>
+            </table>
+        </section>
+    </div>
+</main>
