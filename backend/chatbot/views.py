@@ -79,6 +79,7 @@ class ChatView(APIView):
         }
 
         try:
+            # Appel au graph pour obtenir la réponse de l'IA
             result      = bank_graph.invoke(initial_state)
             ai_response = result["messages"][-1].content
             agent_used  = result.get("agent", "unknown")
