@@ -150,7 +150,7 @@
                 <span></span><span></span><span></span>
               </div>
             } @else {
-              <p class="bubble-text">{{ msg.content }}</p>
+              <div class="bubble-text markdown-body" [innerHTML]="msg.content | markdown"></div>
               @if (msg.agent_used && msg.role === 'assistant') {
                 <span class="agent-badge">{{ msg.agent_used }}</span>
               }
