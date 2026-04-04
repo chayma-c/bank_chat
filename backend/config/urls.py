@@ -15,7 +15,18 @@ Including another URLconf
     2. Add a URL to urlpatterns:  path('blog/', include('blog.urls'))
 """
 from django.urls import path, include
+from django.http import JsonResponse
+from django.db import connection
+
+def health_check(request):
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT 1")
+        return JsonResponse({"status": "healthy"}, status=200)
+    except:
+        return JsonResponse({"status": "unhealthy"}, status=503)
 
 urlpatterns = [
     path('api/v1/chatbot/', include('chatbot.urls')),
+    path('api/health', health_check, name='health'),  
 ]

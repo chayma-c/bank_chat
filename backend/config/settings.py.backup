@@ -132,16 +132,14 @@ WSGI_APPLICATION = 'config.wsgi.application'
 
 DATABASES = {
     'default': {
-        'ENGINE': 'django.db.backends.postgresql',
-        # ✅ CORRIGÉ : Valeurs par défaut alignées avec init-db.sql
-        'NAME':     os.getenv('DB_NAME', 'bank_orchestrateur'),          # ← Était 'bank_chat'
-        'USER':     os.getenv('DB_USER', 'orchestrateur_user'),          # ← Était 'postgres'
-        'PASSWORD': os.getenv('DB_PASSWORD', 'orchestrateur_password'),  # ← Était ''
+        'ENGINE':   'django.db.backends.postgresql',
+        'NAME':     os.getenv('DB_NAME', 'bank_chat'),
+        'USER':     os.getenv('DB_USER', 'postgres'),
+        'PASSWORD': os.getenv('DB_PASSWORD', ''),
         'HOST':     os.getenv('DB_HOST', 'db'),
         'PORT':     os.getenv('DB_PORT', '5432'),
     }
 }
- 
 
 
 # Password validation
