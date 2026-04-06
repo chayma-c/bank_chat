@@ -104,7 +104,8 @@ MIDDLEWARE = [
 
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:4200",  # Angular dev
-    "http://frontend:80",      # conteneur Docker
+    "http://localhost",      # conteneur Docker
+    "http://localhost:80",
 ]
 
 ROOT_URLCONF = 'config.urls'
@@ -186,7 +187,7 @@ STATIC_URL = 'static/'
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 # ── Keycloak ──────────────────────────────────────────────────────────────────
-KEYCLOAK_URL       = os.getenv('KEYCLOAK_URL',       'http://localhost:8080')
+KEYCLOAK_URL       = os.getenv('KEYCLOAK_URL',       'http://localhost:8080/auth')
 KEYCLOAK_REALM     = os.getenv('KEYCLOAK_REALM',     'myrealm')
 KEYCLOAK_CLIENT_ID = os.getenv('KEYCLOAK_CLIENT_ID', 'bank_chat')
 

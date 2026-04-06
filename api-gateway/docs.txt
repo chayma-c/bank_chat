@@ -1,0 +1,31 @@
+Pour tester le gateway
+
+# Test 1 : Health check du Gateway
+curl http://localhost/health
+# Attendu : OK - API Gateway is running
+
+# Test 2 : Route /api/ vers Django
+curl http://localhost/api/health
+# Attendu : {"status":"healthy"}
+
+# Test 3 : Route /fraud/ vers Fraud Service
+curl http://localhost/fraud/health
+# Attendu : {"status":"ok"} ou similaire
+
+# Test 4 : Route /auth/ vers Keycloak
+curl http://localhost/auth/
+# Attendu : Page HTML Keycloak
+
+# Test 5 : Vérifier les logs Nginx
+docker logs bank_chat_gateway --tail 50
+# Devrait afficher les requêtes HTTP avec codes 200
+
+
+# Test avec headers pour voir le routing
+curl -v http://localhost/api/health
+
+# Vérifier que les headers X-Forwarded sont ajoutés
+# Devrait montrer :
+# > GET /api/health HTTP/1.1
+# < HTTP/1.1 200 OK
+# < X-Forwarded-For: ...
