@@ -13,7 +13,7 @@ export const environment = {
  
   // ── Une seule URL pour tout ──────────────────────────────────────────────
   apiBaseUrl: 'http://localhost/api/v1/chatbot',   // → gateway → Django :8000
-  fraudUrl:   'http://localhost/api/fraud',         // → gateway → fraud-service :8001
+  fraudUrl:   'http://localhost/fraud',         // → gateway → fraud-service :8001
  
   // ── Keycloak ─────────────────────────────────────────────────────────────
   keycloak: {
