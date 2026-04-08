@@ -37,6 +37,10 @@ export class ChatComponent implements OnInit, AfterViewChecked {
   readonly userInitial = this.keycloak.userInitial;
   readonly email = this.keycloak.email;
 
+  get isAdmin(): boolean {
+    return this.keycloak.isAdmin;
+  }
+
   sessionId = signal<string>(uuidv4());
   messages = signal<LocalMessage[]>([]);
   userInput = signal<string>('');
@@ -44,6 +48,8 @@ export class ChatComponent implements OnInit, AfterViewChecked {
   sidebarOpen = signal<boolean>(true);
   conversations = signal<Conversation[]>([]);
   activeSession = signal<string>('');
+
+  selectedAgent = signal<string>('auto');
 
   /** Controls the visibility of the profile popover menu */
   profileMenuOpen = signal<boolean>(false);
@@ -159,10 +165,13 @@ export class ChatComponent implements OnInit, AfterViewChecked {
     this.messages.update(msgs => [...msgs, { role: 'user', content: text }]);
     this.messages.update(msgs => [...msgs, { role: 'assistant', content: '', loading: true }]);
 
+    const agent = this.selectedAgent() === 'auto' ? undefined : this.selectedAgent();
+
     this.chatService.streamMessage({
       user_id: this.userId,
       session_id: this.sessionId(),
-      message: text
+      message: text,
+      agent: agent
     }).subscribe({
       next: (evt) => {
         if (evt.error) {

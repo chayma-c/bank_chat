@@ -142,6 +142,20 @@ services:
       - keycloak
       - fraud-service
     restart: unless-stopped
+    
+  # ── Administration Angular ───────────────────────────────────────────────────────
+  administration:
+    build:
+      context: ./administration/frontend
+      dockerfile: Dockerfile
+    container_name: bank_chat_administration
+    ports:
+      - "4201:80"
+    depends_on:
+      - chatbot
+      - keycloak
+      - fraud-service
+    restart: unless-stopped
 
 volumes:
   postgres_data:

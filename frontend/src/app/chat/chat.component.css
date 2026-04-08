@@ -258,7 +258,28 @@
 .navbar-right {
   display: flex;
   align-items: center;
-  gap: 0.4rem;
+  gap: 0.75rem;
+}
+
+.admin-link {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--text-color);
+  text-decoration: none;
+  font-size: 0.85rem;
+  font-weight: 500;
+  padding: 0.4rem 0.75rem;
+  border-radius: 0.5rem;
+  background: var(--bg-hover);
+  border: 1px solid var(--border-color);
+  transition: all 0.2s ease;
+}
+
+.admin-link:hover {
+  background: var(--hover-dark);
+  color: #fff;
+  border-color: rgba(255, 255, 255, 0.2);
 }
 
 .status-dot {
@@ -578,7 +599,43 @@
 }
 
 .input-box:focus-within {
-  border-color: #2563eb;
+  border-color: var(--accent-blue);
+  box-shadow: 0 0 0 2px rgba(96, 165, 250, 0.2);
+}
+
+.agent-select-wrapper {
+  display: flex;
+  align-items: center;
+  padding-left: 0.5rem;
+  border-right: 1px solid var(--border-color);
+  padding-right: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.agent-selector {
+  background: transparent;
+  color: var(--text-muted);
+  border: none;
+  outline: none;
+  font-size: 0.85rem;
+  font-weight: 500;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: 1.25rem;
+  background-image: url("data:image/svg+xml;charset=UTF-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' fill='none' viewBox='0 0 24 24' stroke='%239ca3af' stroke-width='2'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' d='M19 9l-7 7-7-7'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right center;
+  transition: color 0.2s;
+}
+
+.agent-selector:hover, .agent-selector:focus {
+  color: var(--text-color);
+}
+
+.agent-selector option {
+  background: var(--bg-card);
+  color: var(--text-color);
 }
 
 .input-field {

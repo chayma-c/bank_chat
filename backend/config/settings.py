@@ -188,7 +188,15 @@ KEYCLOAK_URL       = os.getenv('KEYCLOAK_URL',       'http://localhost:8080')
 KEYCLOAK_REALM     = os.getenv('KEYCLOAK_REALM',     'myrealm')
 KEYCLOAK_CLIENT_ID = os.getenv('KEYCLOAK_CLIENT_ID', 'bank_chat')
 
-# ── REST Framework (updated) ────────────────────────��────────────────────────
+# Admin credentials used by the backend to call the Keycloak Admin REST API.
+# These are NEVER exposed to clients — only used server-side by get_admin_token().
+# admin-cli is Keycloak's built-in admin client that lives in the 'master' realm.
+KEYCLOAK_ADMIN_USERNAME   = os.getenv('KEYCLOAK_ADMIN_USERNAME',   'admin')
+KEYCLOAK_ADMIN_PASSWORD   = os.getenv('KEYCLOAK_ADMIN_PASSWORD',   'admin')
+KEYCLOAK_ADMIN_CLIENT_ID  = os.getenv('KEYCLOAK_ADMIN_CLIENT_ID',  'admin-cli')
+KEYCLOAK_ADMIN_REALM      = os.getenv('KEYCLOAK_ADMIN_REALM',      'master')
+
+# ── REST Framework (updated) ────────────────────────────────────────────────
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
         'chatbot.auth.authentication.KeycloakAuthentication',
