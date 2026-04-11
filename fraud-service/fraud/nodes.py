@@ -91,7 +91,7 @@ def parse_request(state: FraudAgentState) -> Dict:
 
     if not iban:
         error_msg = (
-            "❌ Je n'ai pas pu détecter d'IBAN dans votre message.\n\n"
+            "J'aurai besoin de l'IBAN du compte pour pouvoir répondre à votre demande.\n\n"
             "Veuillez fournir un IBAN valide, par exemple :\n"
             "- `IBAN_FR123`\n"
             "- `FR7612345678901234567890123`"
