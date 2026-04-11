@@ -205,7 +205,7 @@ REST_FRAMEWORK = {
         'chatbot.auth.authentication.KeycloakAuthentication',
     ],
     'DEFAULT_PERMISSION_CLASSES': [
-        'rest_framework.permissions.IsAuthenticated',
+        'chatbot.auth.permissions.IsAuthenticated',
     ],
     'DEFAULT_RENDERER_CLASSES': [
         'rest_framework.renderers.JSONRenderer',
