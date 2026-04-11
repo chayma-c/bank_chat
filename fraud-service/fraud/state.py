@@ -64,3 +64,5 @@ class FraudAgentState(TypedDict):
     report_path: Optional[str]                   # path to generated Excel report
     llm_summary: str                             # LLM-generated natural language summary
     error: Optional[str]
+
+    download_url: Optional[str]                  # URL to download the Excel report     
