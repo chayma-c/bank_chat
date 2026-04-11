@@ -1,6 +1,7 @@
 import re
 import os
 from fastapi import FastAPI
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from langchain_core.messages import HumanMessage
 from fraud.graph import run_fraud_agent
@@ -81,6 +82,13 @@ async def analyze(req: FraudRequest):
         "llm_summary":        result.get("llm_summary", ""),
         "error":              result.get("error"),
     }
+
+
+@app.get("/download")
+async def download_file(file: str):
+    if file and os.path.exists(file):
+        return FileResponse(path=file, filename=os.path.basename(file))
+    return {"error": "File not found."}
 
 
 @app.get("/health")
