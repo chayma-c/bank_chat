@@ -92,46 +92,62 @@ SYSTEM_PROMPTS = {
 
 def detect_intent(state: BankChatState) -> BankChatState:
     last_msg = state["messages"][-1].content
-
-    # ── Règle 1 : détection par regex AVANT le LLM (plus fiable) ──────────────
-    import re
     msg_lower = last_msg.lower()
-
-    # Mots-clés fraud très spécifiques → bypass LLM
-    FRAUD_KEYWORDS = [
-        "fraude", "fraud", "anomalie", "anomal", "suspect",
-        "iban_", "blanchiment", "aml", "tracfin", "risque",
-        "analyse les", "vérifie", "verif", "check suspicious",
-        "transaction suspecte", "detect", "export transaction",
-    ]
-    # Détecter aussi un IBAN réel (FR + chiffres)
+    import re
     IBAN_PATTERN = re.compile(r'\b(IBAN_\w+|[A-Z]{2}\d{2}[\w\s]{10,30})\b', re.IGNORECASE)
 
-    if any(kw in msg_lower for kw in FRAUD_KEYWORDS) or IBAN_PATTERN.search(last_msg):
-        print(f"🧠 Detected intent: fraud (keyword match from: '{last_msg[:80]}')")
-        return {**state, "intent": "fraud"}
-
-    # ── Règle 2 : LLM pour les cas ambigus ────────────────────────────────────
+    # ── Règle 1 : LLM pour la compréhension du contexte ────────────────────────
+    # On exécute le LLM en premier pour bien différencier une analyse de fraude
+    # d'une question générale sur la fraude qui devrait aller vers "support".
     prompt = (
         "You are a strict banking intent classifier. "
         "Reply with EXACTLY one word, nothing else, no punctuation.\n\n"
         "Rules:\n"
         "- account   → balance, statement, account info\n"
         "- transfer  → send money, wire transfer, payment to someone\n"
-        "- support   → card blocked, complaint, technical problem, help\n"
-        "- fraud     → fraud, suspicious, anomaly, IBAN analysis, AML, risk\n"
+        "- support   → card blocked, complaint, technical problem, help, asking what fraud is, learning about scams, requesting advice against dangers\n"
+        "- fraud     → explicitly reporting a fraudulent transaction, requesting IBAN analysis, anomaly detection request, AML or Tracfin checks\n"
         "- fallback  → anything else\n\n"
         f"Message: {last_msg}\n\n"
         "Your answer (one word only):"
     )
 
-    response = llm.invoke(prompt)
-    intent   = response.content.strip().lower().split()[0]
+    try:
+        response = llm.invoke(prompt)
+        intent   = response.content.strip().lower().split()[0]
+    except Exception as e:
+        print(f"⚠️ LLM intent fallback triggered due to error: {e}")
+        intent = "fallback"
 
     if intent not in ("account", "transfer", "support", "fraud"):
         intent = "fallback"
 
-    print(f"🧠 Detected intent: {intent} (from: '{last_msg[:80]}...')")
+    # ── Règle 2 : Regex & Keywords (Sécurité / Override) ──────────────────────
+    # Si le LLM se trompe ou que l'utilisateur donne un IBAN avec un but clair.
+
+    FRAUD_ACTION_KEYWORDS = [
+        "analyse", "vérifie", "verif", "check", "detect", 
+        "export", "évaluer", "scan", "tester"
+    ]
+    
+    FRAUD_KEYWORDS = [
+        "fraude", "fraud", "anomalie", "anomal", "suspect",
+        "iban_", "blanchiment", "aml", "tracfin", "risque", "arnaque", "vol"
+    ]
+
+    has_iban = bool(IBAN_PATTERN.search(last_msg))
+
+    # Condition override 1 : IBAN explicitement présent + mot-clé fort = forcing fraud
+    if intent != "fraud" and has_iban and any(kw in msg_lower for kw in FRAUD_KEYWORDS + FRAUD_ACTION_KEYWORDS):
+        print(f"🧠 Detected intent override: fraud (IBAN + keyword match from: '{last_msg[:80]}')")
+        intent = "fraud"
+    
+    # Condition override 2 : Message très court et direct (ex: "signaler arnaque", "fraude détectée")
+    elif intent != "fraud" and len(msg_lower.split()) <= 4 and any(kw in msg_lower for kw in FRAUD_KEYWORDS):
+        print(f"🧠 Detected intent override: fraud (short keyword phrase from: '{last_msg[:80]}')")
+        intent = "fraud"
+
+    print(f"🧠 Detected final intent: {intent} (from: '{last_msg[:80]}...')")
     return {**state, "intent": intent}
 
 
