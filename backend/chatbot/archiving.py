@@ -35,8 +35,10 @@ from django.db import transaction
 logger = logging.getLogger(__name__)
 
 # ── Seuils ────────────────────────────────────────────────────────────────────
-ARCHIVE_THRESHOLD = 50   # archiver si > N messages dans la conversation
-KEEP_RECENT       = 12   # garder les N derniers messages intacts
+ARCHIVE_THRESHOLD = 50 
+KEEP_RECENT       = 12
+#ARCHIVE_THRESHOLD = 50   # archiver si > N messages dans la conversation
+#KEEP_RECENT       = 12   # garder les N derniers messages intacts
 BATCH_SIZE        = 100  # conversations traitées par run
 
 

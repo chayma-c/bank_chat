@@ -76,6 +76,21 @@ def fraud_agent(state: BankChatState) -> dict:
             "error": str(e),
         }
 
+def text_to_sql_agent(state: BankChatState) -> dict:
+    """
+    Text-to-SQL agent node.
+    Delegates to the text-to-sql-service microservice via HTTP.
+    """
+    response = httpx.post(
+        f"{os.getenv('TEXT2SQL_SERVICE_URL', 'http://text-to-sql-service:8002')}/query",
+        json={"question": last_user_msg, "user_id": state["user_id"]},
+        timeout=60.0,
+    )
+    result = response.json()
+    return {
+        "messages": [AIMessage(content=result["explanation"])],
+        "agent": "text2sql_agent",
+    }
 
 def create_graph():
     graph = StateGraph(BankChatState)
@@ -85,6 +100,7 @@ def create_graph():
     graph.add_node("transfer_agent", transfer_agent)
     graph.add_node("support_agent",  support_agent)
     graph.add_node("fraud_agent",    fraud_agent)
+    graph.add_node("text_to_sql_agent", text_to_sql_agent)
     graph.add_node("fallback",       handle_fallback)
 
     graph.set_entry_point("detect_intent")
@@ -97,6 +113,7 @@ def create_graph():
             "transfer_agent": "transfer_agent",
             "support_agent":  "support_agent",
             "fraud_agent":    "fraud_agent",
+            "text_to_sql_agent": "text_to_sql_agent",
             "fallback":       "fallback",
         }
     )
@@ -105,6 +122,7 @@ def create_graph():
     graph.add_edge("transfer_agent", END)
     graph.add_edge("support_agent",  END)
     graph.add_edge("fraud_agent",    END)
+    graph.add_edge("text_to_sql_agent", END)
     graph.add_edge("fallback",       END)
 
     return graph.compile()

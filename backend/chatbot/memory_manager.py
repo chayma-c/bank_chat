@@ -233,7 +233,7 @@ def build_summary_prompt(messages_to_summarize: list, existing_summary: Optional
             f"NOUVEAUX ÉCHANGES :\n{conversation_text}\n\n"
             "Mets à jour le résumé en intégrant les nouvelles informations. "
             "Garde uniquement les informations pertinentes pour la suite. "
-            f"Maximum {SUMMARY_MAX_TOKENS * CHARS_PER_TOKEN} caractères. "
+            f"Maximum {SUMMARY_MAX_TOKENS * CHARS_PER_TOKEN} caractères. " 
             "Résumé mis à jour :"
         )
     else:
@@ -324,7 +324,9 @@ class MemoryManager:
             from langchain_core.messages import HumanMessage
             context.append(HumanMessage(content=new_message))
             return context
-    
+        
+        # Séparer anciens vs récents 
+        # si recent_count = 12 (6 échanges) → on archive tout ce qui est avant 
         recent_count = min(RECENT_TURNS * 2, total)
         old_msgs     = all_db_msgs[:total - recent_count]
         recent_msgs  = all_db_msgs[total - recent_count:]
@@ -335,6 +337,8 @@ class MemoryManager:
     
         # Résumé si : anciens msgs présents OU résumé archivé en PG
         if (old_msgs and total > SUMMARY_TRIGGER) or pg_summary:
+
+            # Construire le résumé à partir du cache Redis ou en générant via LLM
             summary_text = self._get_or_build_summary(
                 session_id,
                 old_msgs,
@@ -420,7 +424,7 @@ class MemoryManager:
         new_message: str,
     ) -> list[BaseMessage]:
         """
-        Assemble le contexte final en respectant TOKEN_BUDGET.
+        Assemble le contexte final en respectant TOKEN_BUDGET=3k.
         
         Algorithme de budget :
         1. Réserver des tokens pour le nouveau message
