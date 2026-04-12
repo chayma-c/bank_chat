@@ -98,6 +98,9 @@ def run_fraud_agent(
         "report_path": None,
         "llm_summary": "",
         "error": None,
+        "sheet_url": None,
+        "drive_url": None,
+        "output_errors": [],
     }
 
     result = fraud_graph.invoke(initial_state)
