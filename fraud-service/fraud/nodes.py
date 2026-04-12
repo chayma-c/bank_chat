@@ -20,8 +20,8 @@ from .scoring import (
     compute_final_score,
     check_tracfin_required,
 )
-from .report import generate_transaction_export, generate_fraud_report
-
+from .report import generate_transaction_export
+from .output_reports import route_fraud_output
 
 # ── LLM autonome ─────────────────────────────────────────────────────────────
 
@@ -188,16 +188,16 @@ def analyze_fraud(state: FraudAgentState) -> Dict:
     score_final, risk_level              = compute_final_score(score_behavioral, score_aml)
     tracfin                              = check_tracfin_required(rule_results, df)
 
-    report_path = generate_fraud_report(
-        df=df,
-        iban=state["iban"],
-        rule_results=rule_results,
-        behavioral_signals=behavioral_signals,
-        score_behavioral=score_behavioral,
-        score_aml=score_aml,
-        score_final=score_final,
-        risk_level=risk_level,
-        tracfin_required=tracfin,
+    output = route_fraud_output(
+    df=df,
+    iban=state["iban"],
+    rule_results=rule_results,
+    behavioral_signals=behavioral_signals,
+    score_behavioral=score_behavioral,
+    score_aml=score_aml,
+    score_final=score_final,
+    risk_level=risk_level,
+    tracfin_required=tracfin,
     )
 
     print(f"[fraud] Analyse terminée — score={score_final}, risk={risk_level}")
@@ -209,7 +209,11 @@ def analyze_fraud(state: FraudAgentState) -> Dict:
         "score_final":      score_final,
         "risk_level":       risk_level,
         "tracfin_required": tracfin,
-        "report_path":      report_path,
+        "report_path":      output["local_path"],
+        "download_url":     output.get("download_url", ""),
+        "sheet_url":        output["sheet_url"],
+        "drive_url":        output["drive_url"],
+        "output_errors":    output["errors"],
         "error":            None,
     }
 
@@ -303,7 +307,7 @@ def generate_summary(state: FraudAgentState) -> Dict:
         f"**Score final:** {state.get('score_final', 0)}/100 {risk_emoji} "
         f"**{state.get('risk_level', '')}**\n"
         f"**TRACFIN:** {'⚠️ DÉCLARATION REQUISE' if state.get('tracfin_required') else '✅ Non requis'}\n"
-        f"**Rapport Excel:** `{state.get('report_path', 'N/A')}`\n\n"
+        f"**📥 Rapport Excel:** {state.get('download_url') or state.get('report_path', 'N/A')}\n\n"
         f"---\n\n{llm_text}"
     )
 
