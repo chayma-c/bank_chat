@@ -1,4 +1,4 @@
-from django.urls import path
+from django.urls import path, include
 from . import views
 
 urlpatterns = [
@@ -15,4 +15,7 @@ urlpatterns = [
 
     # Health check
     path('health/', views.HealthCheckView.as_view(), name='health'),
+
+    # Auth / role management
+    path('', include('chatbot.auth.urls')),
 ]

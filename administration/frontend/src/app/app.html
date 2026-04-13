@@ -1,0 +1,472 @@
+<!DOCTYPE html>
+
+<html class="light" lang="en">
+
+<head>
+  <meta charset="utf-8" />
+  <meta content="width=device-width, initial-scale=1.0" name="viewport" />
+  <title>The Sentinel | Fraud Detection Authority</title>
+  <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+  <link
+    href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&amp;family=Inter:wght@300;400;500;600&amp;display=swap"
+    rel="stylesheet" />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap"
+    rel="stylesheet" />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap"
+    rel="stylesheet" />
+  <script id="tailwind-config">
+    tailwind.config = {
+      darkMode: "class",
+      theme: {
+        extend: {
+          colors: {
+            "on-secondary-fixed-variant": "#3d4756",
+            "on-tertiary-container": "#ffede6",
+            "tertiary-fixed": "#ffdbcd",
+            "tertiary-fixed-dim": "#ffb596",
+            "primary": "#004ac6",
+            "surface-dim": "#d6dae0",
+            "secondary-container": "#d6e0f3",
+            "secondary-fixed": "#d9e3f6",
+            "on-primary": "#ffffff",
+            "on-primary-container": "#eeefff",
+            "outline": "#737686",
+            "on-error": "#ffffff",
+            "error-container": "#ffdad6",
+            "surface-tint": "#0053db",
+            "on-error-container": "#93000a",
+            "on-tertiary-fixed-variant": "#7d2d00",
+            "on-tertiary-fixed": "#360f00",
+            "tertiary-container": "#bc4800",
+            "on-surface": "#171c20",
+            "surface-container-low": "#f0f4fa",
+            "surface-bright": "#f6f9ff",
+            "surface-container": "#eaeef4",
+            "on-secondary-container": "#596373",
+            "surface-variant": "#dfe3e9",
+            "secondary": "#555f6f",
+            "inverse-on-surface": "#edf1f7",
+            "primary-fixed-dim": "#b4c5ff",
+            "background": "#f6f9ff",
+            "surface-container-highest": "#dfe3e9",
+            "secondary-fixed-dim": "#bdc7d9",
+            "on-secondary-fixed": "#121c2a",
+            "primary-container": "#2563eb",
+            "surface-container-lowest": "#ffffff",
+            "on-primary-fixed": "#00174b",
+            "on-background": "#171c20",
+            "tertiary": "#943700",
+            "outline-variant": "#c3c6d7",
+            "error": "#ba1a1a",
+            "primary-fixed": "#dbe1ff",
+            "surface": "#f6f9ff",
+            "inverse-primary": "#b4c5ff",
+            "on-surface-variant": "#434655",
+            "surface-container-high": "#e5e8ee",
+            "on-primary-fixed-variant": "#003ea8",
+            "inverse-surface": "#2c3136",
+            "on-tertiary": "#ffffff",
+            "on-secondary": "#ffffff"
+          },
+          fontFamily: {
+            "headline": ["Manrope"],
+            "body": ["Inter"],
+            "label": ["Inter"]
+          },
+          borderRadius: { "DEFAULT": "0.125rem", "lg": "0.25rem", "xl": "0.5rem", "full": "0.75rem" },
+        },
+      },
+    }
+  </script>
+  <style>
+    .material-symbols-outlined {
+      font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+    }
+
+    .glass-header {
+      backdrop-filter: blur(12px);
+    }
+
+    .sidebar-tonal {
+      background-color: #f0f4fa;
+    }
+  </style>
+</head>
+
+<body class="bg-background font-body text-on-surface selection:bg-primary-fixed">
+  <!-- SideNavBar (The Anchor) -->
+  <aside class="h-screen w-64 fixed left-0 top-0 bg-[#f0f4fa] dark:bg-slate-900 flex flex-col py-6 z-40">
+    <div class="px-6 mb-10">
+      <div class="flex items-center gap-3 mb-1">
+        <div class="w-8 h-8 bg-primary rounded flex items-center justify-center">
+          <span class="material-symbols-outlined text-white text-lg" data-weight="fill"
+            style="font-variation-settings: 'FILL' 1;">security</span>
+        </div>
+        <h1 class="font-headline font-extrabold text-[#004ac6] dark:text-blue-500 text-xl tracking-tight">The Sentinel
+        </h1>
+      </div>
+      <p class="font-headline font-medium text-xs text-slate-500 tracking-wide">Clinical Authority</p>
+    </div>
+    <nav class="flex-grow px-3 space-y-1">
+      <a class="flex items-center gap-3 px-4 py-3 text-[#004ac6] dark:text-blue-400 bg-[#ffffff] dark:bg-slate-800 rounded-r-full font-bold shadow-sm translate-x-1 transition-transform"
+        href="#">
+        <span class="material-symbols-outlined" data-icon="dashboard">dashboard</span>
+        <span class="font-headline text-sm tracking-wide">Dashboard</span>
+      </a>
+      <a class="flex items-center gap-3 px-4 py-3 text-slate-500 dark:text-slate-400 hover:text-[#171c20] hover:bg-blue-50/50 dark:hover:bg-slate-800/50 transition-all"
+        href="#">
+        <span class="material-symbols-outlined" data-icon="rule">rule</span>
+        <span class="font-headline text-sm tracking-wide">Rule Management</span>
+      </a>
+      <a class="flex items-center gap-3 px-4 py-3 text-slate-500 dark:text-slate-400 hover:text-[#171c20] hover:bg-blue-50/50 dark:hover:bg-slate-800/50 transition-all"
+        href="#">
+        <span class="material-symbols-outlined" data-icon="history_edu">history_edu</span>
+        <span class="font-headline text-sm tracking-wide">Decision Logs</span>
+      </a>
+      <a class="flex items-center gap-3 px-4 py-3 text-slate-500 dark:text-slate-400 hover:text-[#171c20] hover:bg-blue-50/50 dark:hover:bg-slate-800/50 transition-all"
+        href="#">
+        <span class="material-symbols-outlined" data-icon="query_stats">query_stats</span>
+        <span class="font-headline text-sm tracking-wide">Model Configuration</span>
+      </a>
+    </nav>
+    <div class="px-3 border-t border-outline-variant/10 pt-6 space-y-1">
+      <a class="flex items-center gap-3 px-4 py-3 text-slate-500 dark:text-slate-400 hover:text-[#171c20] hover:bg-blue-50/50 transition-all"
+        href="#">
+        <span class="material-symbols-outlined" data-icon="help">help</span>
+        <span class="font-headline text-sm tracking-wide">Support</span>
+      </a>
+      <a class="flex items-center gap-3 px-4 py-3 text-slate-500 dark:text-slate-400 hover:text-error transition-all"
+        href="#">
+        <span class="material-symbols-outlined" data-icon="logout">logout</span>
+        <span class="font-headline text-sm tracking-wide">Logout</span>
+      </a>
+    </div>
+  </aside>
+  <!-- Main Content Stage -->
+  <main class="ml-64 min-h-screen">
+    <!-- TopAppBar (The Filter) -->
+    <header
+      class="w-full sticky top-0 z-50 bg-[#f6f9ff]/80 dark:bg-slate-950/80 backdrop-blur-md flex items-center justify-between px-8 py-3">
+      <div class="flex items-center gap-6">
+        <div class="relative group">
+          <span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-slate-400">search</span>
+          <input
+            class="bg-surface-container-high/40 border-none rounded-lg pl-10 pr-4 py-2 text-sm w-80 focus:ring-1 focus:ring-primary/20 focus:bg-white transition-all font-body"
+            placeholder="Search accounts, rules, or hash..." type="text" />
+        </div>
+      </div>
+      <div class="flex items-center gap-4">
+        <button
+          class="w-10 h-10 flex items-center justify-center rounded-full text-slate-500 hover:bg-blue-50 dark:hover:bg-slate-800 transition-colors">
+          <span class="material-symbols-outlined" data-icon="notifications">notifications</span>
+        </button>
+        <button
+          class="w-10 h-10 flex items-center justify-center rounded-full text-slate-500 hover:bg-blue-50 dark:hover:bg-slate-800 transition-colors">
+          <span class="material-symbols-outlined" data-icon="settings">settings</span>
+        </button>
+        <div class="h-8 w-px bg-outline-variant/20 mx-2"></div>
+        <div class="flex items-center gap-3">
+          <div class="text-right">
+            <p class="text-xs font-bold text-on-surface">C. Investigator</p>
+            <p class="text-[10px] text-slate-500 uppercase tracking-widest">Level 4 Auth</p>
+          </div>
+          <img alt="Chief Investigator Profile" class="w-10 h-10 rounded-full object-cover"
+            data-alt="Close up portrait of a professional male investigator in a modern office with natural light and minimalist background"
+            src="https://lh3.googleusercontent.com/aida-public/AB6AXuBtW8olGsFxU41bh1ay1fun3wrakOr2G6iOmQHFB3bIoY_KOEuWgfMEszpBfR13AN2vo2wmxMtrVDfGnLFa8kQ8_rMbSjsOrw2sXmMMMfwFk63dDNqV8CcmbRgjuAp7aUgfZM5zs9B3WNNsa-ec4RVtme4b1cSPMLQ2npOXyZRoK02Xqtqm6m8ytyO0EfzNo8dTOI92Cu77kSAtTLwCR0XCI-3CZttRg2XDHdMhfl_qgeyL8KGOfB3MOpABnge1jis1Z3NOhXKPjQ" />
+        </div>
+      </div>
+    </header>
+    <!-- Dashboard Canvas -->
+    <div class="p-8 max-w-[1600px] mx-auto">
+      <!-- Page Header -->
+      <div class="flex items-end justify-between mb-10">
+        <div>
+          <span class="text-primary font-bold text-xs uppercase tracking-[0.2em] mb-2 block">System Pulse</span>
+          <h2 class="font-headline text-4xl font-extrabold tracking-tight text-on-surface">Intelligence Dashboard</h2>
+        </div>
+        <div class="flex gap-3">
+          <button
+            class="px-4 py-2 bg-surface-container-lowest text-primary border border-outline-variant/20 rounded-lg text-sm font-semibold flex items-center gap-2 hover:bg-surface-container transition-colors">
+            <span class="material-symbols-outlined text-sm">calendar_today</span>
+            Last 24 Hours
+          </button>
+          <button
+            class="px-6 py-2 bg-primary text-white rounded-lg text-sm font-bold flex items-center gap-2 shadow-lg shadow-primary/20 hover:scale-[1.02] transition-transform">
+            <span class="material-symbols-outlined text-sm">download</span>
+            Export Report
+          </button>
+        </div>
+      </div>
+      <!-- Bento Grid Metrics -->
+      <div class="grid grid-cols-12 gap-6 mb-12">
+        <!-- Main Metric -->
+        <div
+          class="col-span-12 lg:col-span-4 bg-surface-container-lowest p-8 rounded-xl relative overflow-hidden group border border-outline-variant/10">
+          <div class="relative z-10">
+            <p class="text-sm font-bold text-slate-500 uppercase tracking-widest mb-4">Total Risk Exposure</p>
+            <h3 class="font-headline text-5xl font-extrabold text-on-surface mb-2">$2.4M</h3>
+            <div class="flex items-center gap-2 text-error font-bold text-sm">
+              <span class="material-symbols-outlined text-sm">trending_up</span>
+              +14.2% vs yesterday
+            </div>
+          </div>
+          <div class="absolute -right-4 -bottom-4 opacity-[0.03] group-hover:opacity-[0.07] transition-opacity">
+            <span class="material-symbols-outlined text-[120px]"
+              style="font-variation-settings: 'wght' 700;">monetization_on</span>
+          </div>
+        </div>
+        <div
+          class="col-span-12 md:col-span-4 lg:col-span-3 bg-surface-container-lowest p-8 rounded-xl border border-outline-variant/10">
+          <p class="text-sm font-bold text-slate-500 uppercase tracking-widest mb-4">Alert Volume</p>
+          <h3 class="font-headline text-4xl font-bold text-on-surface mb-2">1,284</h3>
+          <div class="h-1.5 w-full bg-surface-container rounded-full overflow-hidden">
+            <div class="h-full bg-primary w-3/4 rounded-full"></div>
+          </div>
+          <p class="text-xs text-slate-400 mt-3 font-medium">82% Capacity Reached</p>
+        </div>
+        <div
+          class="col-span-12 md:col-span-4 lg:col-span-3 bg-surface-container-lowest p-8 rounded-xl border border-outline-variant/10">
+          <p class="text-sm font-bold text-slate-500 uppercase tracking-widest mb-4">False Positive Rate</p>
+          <h3 class="font-headline text-4xl font-bold text-tertiary mb-2">3.8%</h3>
+          <div class="flex items-center gap-2 text-primary font-bold text-sm">
+            <span class="material-symbols-outlined text-sm">trending_down</span>
+            -0.4% Improving
+          </div>
+        </div>
+        <div
+          class="col-span-12 md:col-span-4 lg:col-span-2 bg-surface-container-lowest p-8 rounded-xl border border-outline-variant/10">
+          <p class="text-sm font-bold text-slate-500 uppercase tracking-widest mb-4">MTTR</p>
+          <h3 class="font-headline text-4xl font-bold text-on-surface mb-2">14<span
+              class="text-lg text-slate-400 ml-1">min</span></h3>
+          <p class="text-xs text-slate-400 mt-3 font-medium">Target: 15min</p>
+        </div>
+      </div>
+      <!-- Primary Data Layer -->
+      <div class="grid grid-cols-12 gap-8">
+        <!-- Trends Chart Section -->
+        <div class="col-span-12 xl:col-span-8 space-y-8">
+          <section class="bg-surface-container-lowest p-8 rounded-xl border border-outline-variant/10">
+            <div class="flex items-center justify-between mb-8">
+              <div>
+                <h4 class="font-headline text-lg font-bold text-on-surface">Fraud Incidence Trends</h4>
+                <p class="text-sm text-slate-500">Real-time detection patterns across all nodes</p>
+              </div>
+              <div class="flex items-center gap-4">
+                <div class="flex items-center gap-2">
+                  <span class="w-3 h-3 rounded-full bg-primary"></span>
+                  <span class="text-xs font-bold text-slate-600">Actual</span>
+                </div>
+                <div class="flex items-center gap-2">
+                  <span class="w-3 h-3 rounded-full bg-outline-variant"></span>
+                  <span class="text-xs font-bold text-slate-600">Projected</span>
+                </div>
+              </div>
+            </div>
+            <!-- Visual representation of a chart -->
+            <div class="h-[300px] w-full flex items-end justify-between gap-2 px-2">
+              <div class="w-full bg-surface-container rounded-t-sm h-[40%]"></div>
+              <div class="w-full bg-surface-container rounded-t-sm h-[55%]"></div>
+              <div class="w-full bg-primary/20 rounded-t-sm h-[45%]"></div>
+              <div class="w-full bg-primary rounded-t-sm h-[70%]"></div>
+              <div class="w-full bg-primary rounded-t-sm h-[60%]"></div>
+              <div class="w-full bg-primary rounded-t-sm h-[85%] relative group">
+                <div
+                  class="absolute -top-12 left-1/2 -translate-x-1/2 bg-on-surface text-white text-[10px] py-1 px-2 rounded opacity-0 group-hover:opacity-100 transition-opacity">
+                  184 Hits</div>
+              </div>
+              <div class="w-full bg-primary rounded-t-sm h-[65%]"></div>
+              <div class="w-full bg-primary/80 rounded-t-sm h-[50%]"></div>
+              <div class="w-full bg-surface-container rounded-t-sm h-[40%]"></div>
+              <div class="w-full bg-surface-container rounded-t-sm h-[30%]"></div>
+              <div class="w-full bg-surface-container rounded-t-sm h-[45%]"></div>
+              <div class="w-full bg-surface-container rounded-t-sm h-[55%]"></div>
+            </div>
+            <div class="flex justify-between mt-4 px-2">
+              <span class="text-[10px] font-bold text-slate-400 uppercase tracking-tighter">00:00</span>
+              <span class="text-[10px] font-bold text-slate-400 uppercase tracking-tighter">04:00</span>
+              <span class="text-[10px] font-bold text-slate-400 uppercase tracking-tighter">08:00</span>
+              <span class="text-[10px] font-bold text-slate-400 uppercase tracking-tighter">12:00</span>
+              <span class="text-[10px] font-bold text-slate-400 uppercase tracking-tighter">16:00</span>
+              <span class="text-[10px] font-bold text-slate-400 uppercase tracking-tighter">20:00</span>
+            </div>
+          </section>
+          <!-- Transaction Feed / Table -->
+          <section class="bg-surface-container-lowest rounded-xl border border-outline-variant/10 overflow-hidden">
+            <div class="p-8 border-b border-outline-variant/10 flex items-center justify-between">
+              <h4 class="font-headline text-lg font-bold text-on-surface">Active Investigations</h4>
+              <button class="text-primary text-xs font-bold uppercase tracking-widest hover:underline">View All
+                Decisions</button>
+            </div>
+            <div class="overflow-x-auto">
+              <table class="w-full text-left">
+                <thead class="bg-surface-container-low">
+                  <tr>
+                    <th class="px-8 py-4 font-label text-[10px] uppercase tracking-wider text-slate-500">Transaction ID
+                    </th>
+                    <th class="px-8 py-4 font-label text-[10px] uppercase tracking-wider text-slate-500">Entity</th>
+                    <th class="px-8 py-4 font-label text-[10px] uppercase tracking-wider text-slate-500">Risk Score</th>
+                    <th class="px-8 py-4 font-label text-[10px] uppercase tracking-wider text-slate-500">Trigger</th>
+                    <th class="px-8 py-4 font-label text-[10px] uppercase tracking-wider text-slate-500">Action</th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-outline-variant/5">
+                  <tr class="hover:bg-surface-container-high transition-colors">
+                    <td class="px-8 py-5 text-sm font-medium text-on-surface">#TRX-89210-99</td>
+                    <td class="px-8 py-5">
+                      <div class="flex items-center gap-3">
+                        <div
+                          class="w-8 h-8 rounded-full bg-secondary-container flex items-center justify-center text-[10px] font-bold text-primary">
+                          JD</div>
+                        <div class="text-xs">
+                          <p class="font-bold">Julianne DeSilva</p>
+                          <p class="text-slate-500">Premium Account</p>
+                        </div>
+                      </div>
+                    </td>
+                    <td class="px-8 py-5">
+                      <span
+                        class="px-3 py-1 bg-error-container text-on-error-container text-[10px] font-extrabold rounded-full">94
+                        - CRITICAL</span>
+                    </td>
+                    <td class="px-8 py-5 text-xs text-slate-600">Anomalous Geo-location Sweep</td>
+                    <td class="px-8 py-5 text-right">
+                      <button class="text-primary hover:bg-primary/5 p-2 rounded-lg transition-colors">
+                        <span class="material-symbols-outlined">visibility</span>
+                      </button>
+                    </td>
+                  </tr>
+                  <tr class="hover:bg-surface-container-high transition-colors">
+                    <td class="px-8 py-5 text-sm font-medium text-on-surface">#TRX-89211-04</td>
+                    <td class="px-8 py-5">
+                      <div class="flex items-center gap-3">
+                        <div
+                          class="w-8 h-8 rounded-full bg-secondary-container flex items-center justify-center text-[10px] font-bold text-primary">
+                          MK</div>
+                        <div class="text-xs">
+                          <p class="font-bold">Marcus Kaine</p>
+                          <p class="text-slate-500">Standard Business</p>
+                        </div>
+                      </div>
+                    </td>
+                    <td class="px-8 py-5">
+                      <span
+                        class="px-3 py-1 bg-tertiary-fixed text-on-tertiary-fixed-variant text-[10px] font-extrabold rounded-full">68
+                        - SUSPICIOUS</span>
+                    </td>
+                    <td class="px-8 py-5 text-xs text-slate-600">Rapid Multi-Merchant Ping</td>
+                    <td class="px-8 py-5 text-right">
+                      <button class="text-primary hover:bg-primary/5 p-2 rounded-lg transition-colors">
+                        <span class="material-symbols-outlined">visibility</span>
+                      </button>
+                    </td>
+                  </tr>
+                  <tr class="hover:bg-surface-container-high transition-colors">
+                    <td class="px-8 py-5 text-sm font-medium text-on-surface">#TRX-89212-12</td>
+                    <td class="px-8 py-5">
+                      <div class="flex items-center gap-3">
+                        <div
+                          class="w-8 h-8 rounded-full bg-secondary-container flex items-center justify-center text-[10px] font-bold text-primary">
+                          LL</div>
+                        <div class="text-xs">
+                          <p class="font-bold">Lydia Loomis</p>
+                          <p class="text-slate-500">Savings Vault</p>
+                        </div>
+                      </div>
+                    </td>
+                    <td class="px-8 py-5">
+                      <span
+                        class="px-3 py-1 bg-error-container text-on-error-container text-[10px] font-extrabold rounded-full">82
+                        - HIGH RISK</span>
+                    </td>
+                    <td class="px-8 py-5 text-xs text-slate-600">High-Velocity Outbound</td>
+                    <td class="px-8 py-5 text-right">
+                      <button class="text-primary hover:bg-primary/5 p-2 rounded-lg transition-colors">
+                        <span class="material-symbols-outlined">visibility</span>
+                      </button>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+        <!-- Right Rail: Audit Log & Real-time Feed -->
+        <div class="col-span-12 xl:col-span-4 space-y-8">
+          <section class="bg-surface-container-low p-8 rounded-xl border border-outline-variant/10">
+            <h4 class="font-headline text-lg font-bold text-on-surface mb-6">Real-Time Alert Feed</h4>
+            <div class="relative pl-6 border-l border-outline-variant/30 space-y-8">
+              <!-- Timeline Item 1 -->
+              <div class="relative">
+                <div class="absolute -left-[29px] top-0 w-3 h-3 rounded-full bg-error ring-4 ring-background"></div>
+                <div class="text-xs text-slate-400 font-bold uppercase tracking-widest mb-1">09:42:12</div>
+                <h5 class="text-sm font-bold text-on-surface">Confirmed Fraud Pattern Identified</h5>
+                <p class="text-xs text-slate-500 mt-1 leading-relaxed">Model 'Vortex-Alpha' triggered high-confidence
+                  intercept on transaction block B-992. Card-not-present sequence detected in Moscow node.</p>
+                <div class="mt-3 flex gap-2">
+                  <span
+                    class="px-2 py-0.5 bg-error/10 text-error text-[9px] font-bold rounded uppercase">Auto-Blocked</span>
+                  <span
+                    class="px-2 py-0.5 bg-slate-200 text-slate-600 text-[9px] font-bold rounded uppercase">Vortex-Alpha</span>
+                </div>
+              </div>
+              <!-- Timeline Item 2 -->
+              <div class="relative">
+                <div class="absolute -left-[29px] top-0 w-3 h-3 rounded-full bg-primary ring-4 ring-background"></div>
+                <div class="text-xs text-slate-400 font-bold uppercase tracking-widest mb-1">09:38:05</div>
+                <h5 class="text-sm font-bold text-on-surface">Investigation Completed</h5>
+                <p class="text-xs text-slate-500 mt-1 leading-relaxed">Case #8821 closed by Agent S. Miller. False
+                  positive confirmed. User 'E. Vance' whitelisted for travel in Japan node.</p>
+              </div>
+              <!-- Timeline Item 3 -->
+              <div class="relative">
+                <div class="absolute -left-[29px] top-0 w-3 h-3 rounded-full bg-tertiary ring-4 ring-background"></div>
+                <div class="text-xs text-slate-400 font-bold uppercase tracking-widest mb-1">09:22:48</div>
+                <h5 class="text-sm font-bold text-on-surface">Suspicious Activity Spike</h5>
+                <p class="text-xs text-slate-500 mt-1 leading-relaxed">System-wide 12% increase in velocity triggers
+                  across Western European IP range. Monitoring threshold adjusted.</p>
+              </div>
+            </div>
+            <button
+              class="w-full mt-8 py-3 bg-surface-container-lowest border border-outline-variant/20 rounded-lg text-xs font-bold text-slate-600 hover:bg-white transition-colors">
+              LOAD OLDER ACTIVITY
+            </button>
+          </section>
+          <!-- Rule Status Card -->
+          <section class="bg-on-surface text-white p-8 rounded-xl relative overflow-hidden">
+            <div class="relative z-10">
+              <h4 class="font-headline text-lg font-bold mb-2">Model Health</h4>
+              <p class="text-xs text-slate-400 mb-6 font-medium">Global Sentinel Network Status</p>
+              <div class="space-y-4">
+                <div class="flex items-center justify-between">
+                  <span class="text-xs font-bold">Neural Engine</span>
+                  <span class="text-[10px] bg-green-500/20 text-green-400 px-2 py-0.5 rounded font-bold">99.9%
+                    UPTIME</span>
+                </div>
+                <div class="w-full bg-white/10 h-1 rounded-full overflow-hidden">
+                  <div class="w-[99.9%] bg-green-500 h-full"></div>
+                </div>
+                <div class="flex items-center justify-between mt-6">
+                  <span class="text-xs font-bold">Latency</span>
+                  <span class="text-xs font-bold">142ms</span>
+                </div>
+                <div class="w-full bg-white/10 h-1 rounded-full overflow-hidden">
+                  <div class="w-[30%] bg-primary-container h-full"></div>
+                </div>
+              </div>
+            </div>
+            <div class="absolute right-0 top-0 w-32 h-32 bg-primary/20 blur-[60px] -mr-16 -mt-16"></div>
+          </section>
+        </div>
+      </div>
+    </div>
+  </main>
+  <!-- FAB for quick action (Highly Contextual) -->
+  <button
+    class="fixed bottom-8 right-8 w-14 h-14 bg-primary text-white rounded-full shadow-2xl flex items-center justify-center hover:scale-110 active:scale-95 transition-transform z-50">
+    <span class="material-symbols-outlined text-2xl">add_moderator</span>
+  </button>
+</body>
+
+</html>

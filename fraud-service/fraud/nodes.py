@@ -5,6 +5,7 @@ Self-contained — does NOT import from parent packages.
 
 import os
 import re
+import urllib.parse
 import pandas as pd
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_groq import ChatGroq
@@ -91,7 +92,7 @@ def parse_request(state: FraudAgentState) -> Dict:
 
     if not iban:
         error_msg = (
-            "❌ Je n'ai pas pu détecter d'IBAN dans votre message.\n\n"
+            "J'aurai besoin de l'IBAN du compte pour pouvoir répondre à votre demande.\n\n"
             "Veuillez fournir un IBAN valide, par exemple :\n"
             "- `IBAN_FR123`\n"
             "- `FR7612345678901234567890123`"
@@ -253,11 +254,18 @@ def generate_summary(state: FraudAgentState) -> Dict:
 
     # ── Export terminé ────────────────────────────────────────────────────
     if action == "export_transactions":
+        report_path = state.get('report_path')
+        if report_path:
+            safe_path = urllib.parse.quote(str(report_path))
+            download_link = f"<u><a href='http://localhost:8001/download?file={safe_path}' target='_blank'>Télécharger l'export</a></u>"
+        else:
+            download_link = "`N/A`"
+
         summary_text = (
             f"✅ **Export terminé**\n\n"
             f"📊 **IBAN:** `{state['iban']}`\n"
             f"📝 **Transactions:** {state.get('transactions_count', 0)}\n"
-            f"📁 **Fichier:** `{state.get('report_path', 'N/A')}`\n\n"
+            f"📁 **Fichier:** {download_link}\n\n"
             "Le fichier Excel contient toutes les transactions du compte."
         )
         return {"llm_summary": summary_text, "messages": [AIMessage(content=summary_text)]}
@@ -299,6 +307,13 @@ def generate_summary(state: FraudAgentState) -> Dict:
         llm_text = response.content
     except Exception as e:
         llm_text = f"(Résumé LLM indisponible: {e})"
+
+    report_path = state.get('report_path')
+    if report_path:
+        safe_path = urllib.parse.quote(str(report_path))
+        download_link = f"<u><a href='http://localhost:8001/download?file={safe_path}' target='_blank'>Télécharger le rapport</a></u>"
+    else:
+        download_link = "`N/A`"
 
     header = (
         f"# 🏦 Rapport d'Analyse de Fraude\n\n"

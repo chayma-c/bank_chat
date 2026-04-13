@@ -8,6 +8,7 @@ export interface ChatRequest {
   user_id: string;
   session_id?: string;
   message: string;
+  agent?: string;
 }
 
 export interface ChatResponse {

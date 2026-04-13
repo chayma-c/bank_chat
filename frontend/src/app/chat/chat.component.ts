@@ -1,9 +1,10 @@
 import {
   Component, OnInit, AfterViewChecked,
-  ViewChild, ElementRef, signal, computed, inject, HostListener
+  ViewChild, ElementRef, signal, computed, inject, HostListener, effect
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
+import { MarkdownPipe } from '../shared/markdown.pipe';
 import { ChatService, Conversation } from '../services/chat.service';
 import { v4 as uuidv4 } from 'uuid';
 import { KeycloakService } from '../auth/keycloak.service';
@@ -18,13 +19,14 @@ interface LocalMessage {
 @Component({
   selector: 'app-chat',
   standalone: true,
-  imports: [CommonModule, FormsModule],
+  imports: [CommonModule, FormsModule, MarkdownPipe],
   templateUrl: './chat.component.html',
   styleUrl: './chat.component.css'
 })
 export class ChatComponent implements OnInit, AfterViewChecked {
   @ViewChild('messagesEnd') private messagesEnd!: ElementRef;
   @ViewChild('messagesArea') private messagesArea?: ElementRef<HTMLElement>;
+  @ViewChild('inputField') private inputField?: ElementRef<HTMLTextAreaElement>;
 
   private stickToBottom = true;
   private readonly bottomThresholdPx = 48;
@@ -35,20 +37,39 @@ export class ChatComponent implements OnInit, AfterViewChecked {
   readonly userInitial = this.keycloak.userInitial;
   readonly email = this.keycloak.email;
 
-  sessionId     = signal<string>(uuidv4());
-  messages      = signal<LocalMessage[]>([]);
-  userInput     = signal<string>('');
-  sending       = signal<boolean>(false);
-  sidebarOpen   = signal<boolean>(true);
+  get isAdmin(): boolean {
+    return this.keycloak.isAdmin;
+  }
+
+  sessionId = signal<string>(uuidv4());
+  messages = signal<LocalMessage[]>([]);
+  userInput = signal<string>('');
+  sending = signal<boolean>(false);
+  sidebarOpen = signal<boolean>(true);
   conversations = signal<Conversation[]>([]);
   activeSession = signal<string>('');
+
+  selectedAgent = signal<string>('auto');
 
   /** Controls the visibility of the profile popover menu */
   profileMenuOpen = signal<boolean>(false);
 
   isNewChat = computed(() => this.messages().length === 0);
 
-  constructor(private chatService: ChatService) {}
+  constructor(private chatService: ChatService) {
+    // Auto-focus the input whenever the model finishes responding
+    effect(() => {
+      if (!this.sending()) {
+        // Use setTimeout to ensure the DOM has updated (textarea re-enabled)
+        setTimeout(() => this.focusInput(), 0);
+      }
+    });
+  }
+
+  /** Focus the textarea programmatically */
+  focusInput(): void {
+    this.inputField?.nativeElement?.focus();
+  }
 
   ngOnInit(): void {
     this.loadConversations();
@@ -87,13 +108,13 @@ export class ChatComponent implements OnInit, AfterViewChecked {
   private scrollToBottom(): void {
     try {
       this.messagesEnd.nativeElement.scrollIntoView({ behavior: 'auto', block: 'end' });
-    } catch {}
+    } catch { }
   }
 
   loadConversations(): void {
     this.chatService.getConversations(this.userId).subscribe({
       next: (convs) => this.conversations.set(convs),
-      error: () => {}
+      error: () => { }
     });
   }
 
@@ -144,10 +165,13 @@ export class ChatComponent implements OnInit, AfterViewChecked {
     this.messages.update(msgs => [...msgs, { role: 'user', content: text }]);
     this.messages.update(msgs => [...msgs, { role: 'assistant', content: '', loading: true }]);
 
+    const agent = this.selectedAgent() === 'auto' ? undefined : this.selectedAgent();
+
     this.chatService.streamMessage({
-      user_id:    this.userId,
+      user_id: this.userId,
       session_id: this.sessionId(),
-      message:    text
+      message: text,
+      agent: agent
     }).subscribe({
       next: (evt) => {
         if (evt.error) {
@@ -167,7 +191,7 @@ export class ChatComponent implements OnInit, AfterViewChecked {
         if (evt.token) {
           this.messages.update(msgs => {
             const updated = [...msgs];
-            const last    = updated[updated.length - 1];
+            const last = updated[updated.length - 1];
             updated[updated.length - 1] = {
               ...last,
               content: last.content + evt.token,
@@ -180,7 +204,7 @@ export class ChatComponent implements OnInit, AfterViewChecked {
         if (evt.done) {
           this.messages.update(msgs => {
             const updated = [...msgs];
-            const last    = updated[updated.length - 1];
+            const last = updated[updated.length - 1];
             updated[updated.length - 1] = { ...last, agent_used: evt.agent, loading: false };
             return updated;
           });
@@ -192,7 +216,7 @@ export class ChatComponent implements OnInit, AfterViewChecked {
         this.messages.update(msgs => {
           const updated = [...msgs];
           updated[updated.length - 1] = {
-            role:    'assistant',
+            role: 'assistant',
             content: 'Erreur de connexion. Veuillez réessayer.',
             loading: false,
           };
