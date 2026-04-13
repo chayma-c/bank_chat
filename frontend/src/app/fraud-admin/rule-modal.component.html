@@ -1,0 +1,196 @@
+<!-- Overlay -->
+<div class="modal-overlay" (click)="close()">
+  <div class="modal-box" (click)="$event.stopPropagation()">
+
+    <!-- Header -->
+    <div class="modal-header">
+      <div class="modal-header-left">
+        <span class="modal-icon" [ngClass]="{
+          'icon-create': isCreate,
+          'icon-edit':   isEdit,
+          'icon-delete': isDelete
+        }">
+          <svg *ngIf="isCreate || isEdit" width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+            <path *ngIf="isCreate" d="M8 1v14M1 8h14" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/>
+            <path *ngIf="isEdit"   d="M11.5 2.5l2 2L5 13H3v-2L11.5 2.5z" stroke="currentColor" stroke-width="1.2" fill="none" stroke-linejoin="round"/>
+          </svg>
+          <svg *ngIf="isDelete" width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+            <path d="M2 4h12M5 4V2h6v2M6 7v5M10 7v5M3 4l1 9h8l1-9" stroke="currentColor" stroke-width="1.3" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </span>
+        <h2 class="modal-title">{{ modalTitle }}</h2>
+      </div>
+      <button class="modal-close" (click)="close()">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+          <path d="M2 2l12 12M14 2L2 14"/>
+        </svg>
+      </button>
+    </div>
+
+    <!-- ── DELETE ──────────────────────────────────────────────── -->
+    <ng-container *ngIf="isDelete && rule">
+      <div class="modal-body">
+        <div class="delete-warning">
+          <div class="delete-warning-icon">
+            <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M10 2a8 8 0 1 0 0 16A8 8 0 0 0 10 2z"/>
+              <path d="M10 7v4M10 13h.01"/>
+            </svg>
+          </div>
+          <div>
+            <p class="delete-warning-title">This action cannot be undone</p>
+            <p class="delete-warning-text">
+              Permanently removes <strong>{{ rule.name }}</strong>
+              (<code>{{ rule.id }}</code>) from the fraud engine.
+              All associated scoring (<strong>+{{ rule.points }} pts</strong>) will no longer apply.
+            </p>
+          </div>
+        </div>
+        <div class="rule-preview-card">
+          <span class="domain-pill" [ngClass]="'domain-' + rule.domain.toLowerCase()">{{ rule.domain }}</span>
+          <span class="preview-trigger">{{ rule.trigger }}</span>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-cancel" (click)="close()">Cancel</button>
+        <button class="btn-danger" (click)="confirmDelete()">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M2 4h12M5 4V2h6v2M3 4l1 9h8l1-9"/>
+          </svg>
+          Delete rule
+        </button>
+      </div>
+    </ng-container>
+
+    <!-- ── CREATE / EDIT ───────────────────────────────────────── -->
+    <ng-container *ngIf="!isDelete">
+      <div class="modal-body">
+
+        <!-- Rule name -->
+        <div class="form-group">
+          <label class="form-label">Rule name <span class="required">*</span></label>
+          <input
+            class="form-input"
+            type="text"
+            [value]="form().name"
+            (input)="updateField('name', $any($event.target).value)"
+            placeholder="e.g. Large amount check"
+          />
+        </div>
+
+        <!-- Domain + Severity -->
+        <div class="form-row">
+          <div class="form-group">
+            <label class="form-label">Risk domain</label>
+            <select class="form-select" [value]="form().domain"
+              (change)="updateField('domain', $any($event.target).value)">
+              <option *ngFor="let d of domains" [value]="d">{{ d }}</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Severity</label>
+            <select class="form-select" [value]="form().severity"
+              (change)="updateField('severity', $any($event.target).value)">
+              <option *ngFor="let s of severities" [value]="s">{{ s }}</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- Trigger logic -->
+        <div class="form-group">
+          <label class="form-label">Trigger logic <span class="required">*</span></label>
+          <input
+            class="form-input"
+            type="text"
+            [value]="form().trigger"
+            (input)="updateField('trigger', $any($event.target).value)"
+            placeholder="e.g. Amount > 3,000 TND"
+          />
+        </div>
+
+        <!-- Trigger detail -->
+        <div class="form-group">
+          <label class="form-label">Trigger detail</label>
+          <input
+            class="form-input"
+            type="text"
+            [value]="form().triggerDetail"
+            (input)="updateField('triggerDetail', $any($event.target).value)"
+            placeholder="Additional condition context"
+          />
+        </div>
+
+        <!-- Score points -->
+        <div class="form-group">
+          <label class="form-label">
+            Score points
+            <span class="points-badge" [ngClass]="pointsPreview().cls">
+              +{{ form().points }} pts — {{ pointsPreview().label }}
+            </span>
+          </label>
+          <input
+            class="form-input"
+            type="number"
+            min="0"
+            max="100"
+            step="5"
+            [value]="form().points"
+            (input)="updateField('points', +$any($event.target).value)"
+          />
+          <div class="score-bar-wrap">
+            <div class="score-bar">
+              <div class="score-bar-fill" [ngClass]="pointsPreview().cls" [style.width]="scoreBarWidth()"></div>
+            </div>
+            <span class="score-bar-label">{{ form().points }}/100</span>
+          </div>
+        </div>
+
+        <!-- Description -->
+        <div class="form-group">
+          <label class="form-label">Description</label>
+          <textarea
+            class="form-input"
+            rows="3"
+            style="resize: vertical"
+            [value]="form().description"
+            (input)="updateField('description', $any($event.target).value)"
+            placeholder="What this rule detects and why it matters…"
+          ></textarea>
+        </div>
+
+        <!-- Active toggle -->
+        <div class="form-group form-group--inline">
+          <label class="toggle-label">
+            <span class="toggle-switch">
+              <input
+                type="checkbox"
+                [checked]="form().active"
+                (change)="updateField('active', $any($event.target).checked)"
+              />
+              <span class="toggle-track"></span>
+            </span>
+            <span class="toggle-text">
+              {{ form().active ? 'Rule active immediately after saving' : 'Rule will be saved as paused' }}
+            </span>
+          </label>
+        </div>
+
+        <!-- Rule ID (edit only) -->
+        <div class="form-group" *ngIf="isEdit && rule">
+          <label class="form-label">Rule ID</label>
+          <input class="form-input form-input--disabled" [value]="rule.id" disabled />
+        </div>
+
+      </div>
+
+      <div class="modal-footer">
+        <button class="btn-cancel" (click)="close()">Cancel</button>
+        <button class="btn-primary" (click)="submit()"
+          [disabled]="!form().name.trim() || !form().trigger.trim()">
+          {{ isCreate ? 'Create rule' : 'Save changes' }}
+        </button>
+      </div>
+    </ng-container>
+
+  </div>
+</div>

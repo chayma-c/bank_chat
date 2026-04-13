@@ -7,6 +7,7 @@ import { FormsModule } from '@angular/forms';
 import { ChatService, Conversation } from '../services/chat.service';
 import { v4 as uuidv4 } from 'uuid';
 import { KeycloakService } from '../auth/keycloak.service';
+import { RouterModule } from '@angular/router';
 
 interface LocalMessage {
   role: 'user' | 'assistant';
@@ -18,7 +19,7 @@ interface LocalMessage {
 @Component({
   selector: 'app-chat',
   standalone: true,
-  imports: [CommonModule, FormsModule],
+  imports: [CommonModule, FormsModule, RouterModule],
   templateUrl: './chat.component.html',
   styleUrl: './chat.component.css'
 })

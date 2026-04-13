@@ -7,8 +7,58 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from langchain_core.messages import HumanMessage
 from fraud.graph import run_fraud_agent
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
+from typing import Optional
 
+router = APIRouter(prefix="/fraud/rules", tags=["fraud-rules"])
 app = FastAPI(title="BankChat Fraud Service", version="1.0.0")
+
+class FraudRuleSchema(BaseModel):
+    id:            Optional[str] = None
+    name:          str
+    domain:        str
+    trigger:       str
+    triggerDetail: str
+    points:        int
+    severity:      str
+    active:        bool
+    description:   str
+
+# In-memory store (replace with DB in production)
+_rules: list[dict] = []
+
+@router.get("/")
+def list_rules():
+    return _rules
+
+@router.post("/")
+def create_rule(rule: FraudRuleSchema):
+    _rules.append(rule.dict())
+    return rule
+
+@router.put("/{rule_id}")
+def update_rule(rule_id: str, rule: FraudRuleSchema):
+    for i, r in enumerate(_rules):
+        if r["id"] == rule_id:
+            _rules[i] = rule.dict()
+            return rule
+    raise HTTPException(404, "Rule not found")
+
+@router.patch("/{rule_id}")
+def patch_rule(rule_id: str, data: dict):
+    for r in _rules:
+        if r["id"] == rule_id:
+            r.update(data)
+            return r
+    raise HTTPException(404, "Rule not found")
+
+@router.delete("/{rule_id}")
+def delete_rule(rule_id: str):
+    global _rules
+    _rules = [r for r in _rules if r["id"] != rule_id]
+    return {"deleted": rule_id}
+
 
 
 def _reports_dir() -> Path:
