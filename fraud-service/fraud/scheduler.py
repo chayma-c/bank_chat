@@ -113,8 +113,12 @@ async def scheduler_loop():
                 should_run = False
                 if settings["frequency"] == "daily":
                     should_run = True
-                elif settings["frequency"] == "weekly" and day_of_week == settings["day_of_week"]:
-                    should_run = True
+                elif settings["frequency"] == "weekly":
+                    # Mapping: UI (Sun=0, Mon=1) -> Python (Mon=0, Sun=6)
+                    # Formula: python_day = (ui_day + 6) % 7
+                    target_python_day = (settings["day_of_week"] + 6) % 7
+                    if day_of_week == target_python_day:
+                        should_run = True
                 
                 # Check if it already ran today (simple avoidance of double triggers in the same minute)
                 last_run = settings.get("last_run")

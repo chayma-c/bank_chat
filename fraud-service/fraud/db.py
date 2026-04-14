@@ -89,7 +89,7 @@ def update_last_run():
                 UPDATE fraud_metadata 
                 SET last_run = CURRENT_TIMESTAMP
                 WHERE id = (SELECT id FROM fraud_metadata LIMIT 1);
-            """, )
+            """)
             conn.commit()
     finally:
         conn.close()

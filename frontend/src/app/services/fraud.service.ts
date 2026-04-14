@@ -8,7 +8,7 @@ export interface FraudSettings {
   time?: string; // HH:mm
   dayOfWeek?: number; // 0-6
   lastRun?: string;
-  lastStatus?: 'success' | 'failure' | 'running';
+  lastStatus?: 'success' | 'failure' | 'running' | 'ready';
 }
 
 @Injectable({
@@ -22,30 +22,21 @@ export class FraudService {
    * Fetch current fraud agent settings
    */
   getSettings(): Observable<FraudSettings> {
-    // For now, return mock data since backend is not yet implemented
-    return of({
-      frequency: 'daily',
-      time: '02:00',
-      lastRun: new Date().toISOString(),
-      lastStatus: 'success'
-    });
+    return this.http.get<FraudSettings>(`${this.apiUrl}/settings`);
   }
 
   /**
    * Update fraud agent settings
    */
   updateSettings(settings: FraudSettings): Observable<any> {
-    console.log('Pushing settings to backend:', settings);
-    return of({ status: 'updated' });
-    // return this.http.post(`${this.apiUrl}/settings`, settings);
+    return this.http.post(`${this.apiUrl}/settings`, settings);
   }
 
   /**
    * Manually trigger the fraud analysis
    */
   triggerAnalysis(): Observable<any> {
-    console.log('Triggering manual analysis...');
-    return of({ status: 'triggered' });
-    // return this.http.post(`${this.apiUrl}/trigger`, {});
+    return this.http.post(`${this.apiUrl}/trigger`, {});
   }
+
 }

@@ -170,13 +170,17 @@ async def list_reports_endpoint():
 async def get_fraud_settings():
     settings = get_settings()
     if not settings:
-        return {"frequency": "manual", "time": "02:00", "dayOfWeek": 1, "lastRun": None}
+        return {"frequency": "manual", "time": "02:00", "dayOfWeek": 1, "lastRun": None, "lastStatus": "ready"}
+    
+    # Simple status inference
+    last_status = "success" if settings["last_run"] else "ready"
     
     return {
         "frequency": settings["frequency"],
         "time":      settings["scheduled_time"],
         "dayOfWeek": settings["day_of_week"],
-        "lastRun":   settings["last_run"].strftime("%Y-%m-%d %H:%M:%S") if settings["last_run"] else None
+        "lastRun":   settings["last_run"].isoformat() if settings["last_run"] else None,
+        "lastStatus": last_status
     }
 
 @app.post("/settings")

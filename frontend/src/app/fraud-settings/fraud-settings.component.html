@@ -101,3 +101,16 @@
     </section>
   </main>
 </div>
+
+<!-- Global Toast Notification -->
+<div class="toast-overlay" *ngIf="notification().show" [class]="notification().type">
+  <div class="toast-content">
+    <div class="toast-icon">
+      <svg *ngIf="notification().type === 'success'" xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" /></svg>
+      <svg *ngIf="notification().type === 'error'" xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" /></svg>
+      <svg *ngIf="notification().type === 'info'" xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+    </div>
+    <span class="toast-message">{{ notification().message }}</span>
+  </div>
+</div>
+

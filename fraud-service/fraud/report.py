@@ -12,7 +12,10 @@ from datetime import datetime
 import pandas as pd
 
 # ── Output directory ──────────────────────────────────────────────────────────
-REPORTS_DIR = Path(__file__).resolve().parent.parent.parent.parent / "data" / "reports"
+REPORTS_DIR = Path(os.getenv("REPORTS_DIR", "/app/data/reports"))
+if not REPORTS_DIR.is_absolute():
+    # Fallback to local repo layout if not in Docker
+    REPORTS_DIR = Path(__file__).resolve().parent.parent.parent.parent / "data" / "reports"
 
 
 def ensure_reports_dir():
