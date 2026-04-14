@@ -180,6 +180,7 @@ async def get_fraud_settings():
         "time":      settings["scheduled_time"],
         "dayOfWeek": settings["day_of_week"],
         "lastRun":   settings["last_run"].isoformat() if settings["last_run"] else None,
+        "lastAutoRun": settings["last_auto_run"].isoformat() if settings["last_auto_run"] else None,
         "lastStatus": last_status
     }
 

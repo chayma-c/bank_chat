@@ -119,6 +119,7 @@ services:
       FRAUD_DB_PASSWORD: sql_password
       FRAUD_DB_PORT: "5432"
       FRAUD_SERVICE_PUBLIC_URL: "http://localhost:8001"
+      TZ: Africa/Tunis
     ports:
       - "8001:8001"
     extra_hosts:
@@ -149,6 +150,7 @@ services:
     env_file:
       - backend/.env
     environment:
+      TZ: Africa/Tunis
       DB_HOST: db
       DB_NAME: bank_orchestrateur
       DB_USER: orchestrateur_user

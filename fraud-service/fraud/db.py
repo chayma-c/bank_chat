@@ -27,9 +27,13 @@ def init_db():
                     scheduled_time VARCHAR(10) DEFAULT '02:00',
                     day_of_week INTEGER DEFAULT 1,
                     last_run TIMESTAMP,
+                    last_auto_run TIMESTAMP,
                     is_active BOOLEAN DEFAULT TRUE
                 );
             """)
+            
+            # Migration: Ensure last_auto_run exists if table was already created
+            cur.execute("ALTER TABLE fraud_metadata ADD COLUMN IF NOT EXISTS last_auto_run TIMESTAMP;")
             
             # Ensure at least one settings row exists
             cur.execute("SELECT COUNT(*) FROM fraud_metadata;")
@@ -88,6 +92,19 @@ def update_last_run():
             cur.execute("""
                 UPDATE fraud_metadata 
                 SET last_run = CURRENT_TIMESTAMP
+                WHERE id = (SELECT id FROM fraud_metadata LIMIT 1);
+            """)
+            conn.commit()
+    finally:
+        conn.close()
+
+def update_last_auto_run():
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE fraud_metadata 
+                SET last_auto_run = CURRENT_TIMESTAMP
                 WHERE id = (SELECT id FROM fraud_metadata LIMIT 1);
             """)
             conn.commit()
