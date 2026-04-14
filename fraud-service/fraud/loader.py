@@ -253,3 +253,11 @@ def get_account_summary(df: pd.DataFrame) -> dict:
             df[type_col].value_counts().to_dict() if type_col else {}
         ),
     }
+
+
+def list_all_ibans(excel_path: Optional[str] = None) -> list[str]:
+    """Return a list of all unique client IBANs found in the transaction dataset."""
+    df = load_transactions(excel_path)
+    if "client_iban" in df.columns:
+        return df["client_iban"].dropna().unique().tolist()
+    return []

@@ -58,6 +58,65 @@ def generate_transaction_export(
         }
         pd.DataFrame(summary_data).to_excel(writer, sheet_name="Résumé", index=False)
 
+
+def generate_master_fraud_report(
+    results: list,
+) -> str:
+    """
+    Generate a master Excel report aggregating results from multiple IBANs.
+    Only includes detailed sheets for accounts with a final score > 50.
+    Returns the file path.
+    """
+    ensure_reports_dir()
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"master_fraud_report_{timestamp}.xlsx"
+    filepath = REPORTS_DIR / filename
+
+    with pd.ExcelWriter(filepath, engine="openpyxl") as writer:
+        # ── Sheet 1: Ranking Dashboard ──
+        summary_rows = []
+        for res in results:
+            summary_rows.append({
+                "IBAN": res["iban"],
+                "Final Score": res["score_final"],
+                "Risk Level": res["risk_level"],
+                "TRACFIN Required": "YES" if res["tracfin_required"] else "NO",
+                "Transactions": res["transactions_count"],
+                "AML Score": res["score_aml"],
+                "Behavioral Score": res["score_behavioral"],
+            })
+        
+        summary_df = pd.DataFrame(summary_rows)
+        # Sort by final score descending
+        if not summary_df.empty:
+            summary_df = summary_df.sort_values(by="Final Score", ascending=False)
+        
+        summary_df.to_excel(writer, sheet_name="Ranking Dashboard", index=False)
+
+        # ── Following Sheets: Detailed analysis for High Risk accounts (> 50) ──
+        for res in results:
+            if res["score_final"] > 50:
+                iban_short = res["iban"][-10:].replace(" ", "_") # Use last 10 chars for sheet name limit
+                sheet_prefix = f"Audit_{iban_short}"
+                
+                # Summary for this IBAN
+                score_summary = pd.DataFrame({
+                    "Metric": ["IBAN", "Score", "Risk", "TRACFIN"],
+                    "Value": [res["iban"], res["score_final"], res["risk_level"], res["tracfin_required"]]
+                })
+                score_summary.to_excel(writer, sheet_name=f"{sheet_prefix}_Summary", index=False)
+
+                # Flagged transactions if available
+                if "transactions_raw" in res and res["transactions_raw"]:
+                    df = pd.DataFrame(res["transactions_raw"])
+                    # Simple filter for high risk transactions in this sheet
+                    high_risk_tx = df.copy()
+                    if "transaction_amount" in high_risk_tx.columns:
+                        high_risk_tx = high_risk_tx[pd.to_numeric(high_risk_tx["transaction_amount"], errors="coerce") > 1000]
+                    
+                    if not high_risk_tx.empty:
+                        high_risk_tx.to_excel(writer, sheet_name=f"{sheet_prefix}_Tx", index=False)
+
     return str(filepath)
 
 
