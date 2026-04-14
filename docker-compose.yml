@@ -77,7 +77,7 @@ services:
       db:
         condition: service_healthy
     # ════════════════════════════════════════════════════════════════════════
-    # HEALTH CHECK CORRIGÉ - Plus permissif et avec plus de temps
+    # HEALTH CHECK
     # ════════════════════════════════════════════════════════════════════════
     healthcheck:
       # Option 1 : Utiliser curl (plus simple et fiable)
