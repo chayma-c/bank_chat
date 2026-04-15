@@ -4,11 +4,11 @@ import {
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
+import { RouterModule } from '@angular/router';
 import { MarkdownPipe } from '../shared/markdown.pipe';
 import { ChatService, Conversation } from '../services/chat.service';
 import { v4 as uuidv4 } from 'uuid';
 import { KeycloakService } from '../auth/keycloak.service';
-import { RouterModule } from '@angular/router';
 
 interface LocalMessage {
   role: 'user' | 'assistant';
@@ -18,12 +18,14 @@ interface LocalMessage {
 }
 
 @Component({
+
   selector: 'app-chat',
   standalone: true,
   imports: [CommonModule, FormsModule, RouterModule, MarkdownPipe],
   templateUrl: './chat.component.html',
   styleUrl: './chat.component.css'
 })
+
 export class ChatComponent implements OnInit, AfterViewChecked {
   @ViewChild('messagesEnd') private messagesEnd!: ElementRef;
   @ViewChild('messagesArea') private messagesArea?: ElementRef<HTMLElement>;
