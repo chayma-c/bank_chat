@@ -1,0 +1,116 @@
+<div class="settings-container">
+  <header class="settings-header">
+    <button class="back-btn" (click)="goBack()" title="Retour au chat">
+      <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M10 19l-7-7m0 0l7-7m-7 7h18" />
+      </svg>
+    </button>
+    <div class="header-content">
+      <h1>Paramètres Fraud Agent</h1>
+      <p class="subtitle">Configurez l'analyse automatique et déclenchez des scans manuels.</p>
+    </div>
+  </header>
+
+  <main class="settings-grid">
+    <!-- Section 1: Scheduling -->
+    <section class="settings-card glass" id="scheduling-section">
+      <div class="card-header">
+        <div class="card-icon schedule">
+          <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+        </div>
+        <h2>Planification</h2>
+      </div>
+
+      <div class="card-body">
+        <div class="form-group">
+          <label>Fréquence d'analyse</label>
+          <div class="radio-group">
+            <label class="radio-item" [class.active]="settings().frequency === 'manual'">
+              <input type="radio" name="frequency" [(ngModel)]="settings().frequency" value="manual">
+              <span>Manuel</span>
+            </label>
+            <label class="radio-item" [class.active]="settings().frequency === 'daily'">
+              <input type="radio" name="frequency" [(ngModel)]="settings().frequency" value="daily">
+              <span>Quotidien</span>
+            </label>
+            <label class="radio-item" [class.active]="settings().frequency === 'weekly'">
+              <input type="radio" name="frequency" [(ngModel)]="settings().frequency" value="weekly">
+              <span>Hebdomadaire</span>
+            </label>
+          </div>
+        </div>
+
+        <div class="conditional-fields" *ngIf="settings().frequency !== 'manual'">
+          <div class="form-group" *ngIf="settings().frequency === 'weekly'">
+            <label for="day-picker">Jour de la semaine</label>
+            <select id="day-picker" [(ngModel)]="settings().dayOfWeek" class="custom-select">
+              <option *ngFor="let day of daysOfWeek" [value]="day.value">{{ day.label }}</option>
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label for="time-picker">Heure de l'analyse</label>
+            <input type="time" id="time-picker" [(ngModel)]="settings().time" class="custom-input">
+          </div>
+        </div>
+
+        <div class="card-footer">
+          <button class="primary-btn" (click)="saveSettings()" [disabled]="isSaving()">
+            <span *ngIf="!isSaving()">Enregistrer la planification</span>
+            <span *ngIf="isSaving()" class="loader"></span>
+          </button>
+          <p class="success-msg" *ngIf="showSuccess()">✓ Paramètres mis à jour</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- Section 2: Manual Trigger & Activity -->
+    <section class="settings-card glass" id="manual-section">
+      <div class="card-header">
+        <div class="card-icon trigger">
+          <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
+          </svg>
+        </div>
+        <h2>Actions & Activité</h2>
+      </div>
+
+      <div class="card-body">
+        <div class="activity-info">
+          <div class="status-item">
+            <span class="label">Dernière analyse :</span>
+            <span class="value">{{ settings().lastRun ? (settings().lastRun | date:'dd MMM yyyy HH:mm') : 'Jamais' }}</span>
+          </div>
+          <div class="status-item">
+            <span class="label">Statut :</span>
+            <span class="value status-badge" [attr.data-status]="settings().lastStatus">
+              {{ settings().lastStatus === 'running' ? 'En cours...' : (settings().lastStatus || 'Prêt') }}
+            </span>
+          </div>
+        </div>
+
+        <p class="info-text">Démarrez instantanément un scan complet des transactions pour détecter les anomalies potentielles.</p>
+        
+        <button class="trigger-btn" (click)="triggerNow()" [disabled]="isTriggering() || settings().lastStatus === 'running'">
+          <span *ngIf="!isTriggering()">Analyser maintenant</span>
+          <span *ngIf="isTriggering()" class="loader"></span>
+        </button>
+      </div>
+    </section>
+  </main>
+</div>
+
+<!-- Global Toast Notification -->
+<div class="toast-overlay" *ngIf="notification().show" [class]="notification().type">
+  <div class="toast-content">
+    <div class="toast-icon">
+      <svg *ngIf="notification().type === 'success'" xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" /></svg>
+      <svg *ngIf="notification().type === 'error'" xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" /></svg>
+      <svg *ngIf="notification().type === 'info'" xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+    </div>
+    <span class="toast-message">{{ notification().message }}</span>
+  </div>
+</div>
+
