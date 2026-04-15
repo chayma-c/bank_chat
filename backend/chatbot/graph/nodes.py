@@ -91,6 +91,18 @@ SYSTEM_PROMPTS = {
 # ── Intent detection ──────────────────────────────────────────────────────────
 
 def detect_intent(state: BankChatState) -> BankChatState:
+    # ── Règle 0 : Override par l'utilisateur (Select Agent) ────────────────────
+    selected = state.get("selected_agent")
+    if selected and selected not in ("orchestrator", "auto"):
+        # Normalisation si nécessaire
+        if selected == "sql":
+            selected = "text_to_sql"
+            
+        valid_intents = ("account", "transfer", "support", "fraud", "text_to_sql")
+        if selected in valid_intents:
+            print(f"🎯 User selected agent override: {selected}")
+            return {**state, "intent": selected}
+
     last_msg = state["messages"][-1].content
     msg_lower = last_msg.lower()
     import re
@@ -153,10 +165,12 @@ def detect_intent(state: BankChatState) -> BankChatState:
 
 def route_to_agent(state: BankChatState) -> str:
     return {
-        "account":  "account_agent",
-        "transfer": "transfer_agent",
-        "support":  "support_agent",
-        "fraud":    "fraud_agent",
+        "account":     "account_agent",
+        "transfer":    "transfer_agent",
+        "support":     "support_agent",
+        "fraud":       "fraud_agent",
+        "text_to_sql": "text_to_sql_agent",
+        "sql":         "text_to_sql_agent",
     }.get(state["intent"], "fallback")
 
 
@@ -229,13 +243,38 @@ def stream_agent_response(intent: str, messages: list):
         return
 
     # Agents classiques — streaming token par token
-    agent_key = {
-        "account":  "account_agent",
-        "transfer": "transfer_agent",
-        "support":  "support_agent",
-    }.get(intent, "fallback")
+    agent_key_map = {
+        "account":     "account_agent",
+        "transfer":    "transfer_agent",
+        "support":     "support_agent",
+        "text_to_sql": "text_to_sql_agent",
+        "sql":         "text_to_sql_agent",
+    }
+    
+    agent_key = agent_key_map.get(intent, "fallback")
 
-    system = SystemMessage(content=SYSTEM_PROMPTS[agent_key])
+    # Si c'est le text_to_sql_agent, on fait l'appel HTTP (pas de stream token par token nativement ici)
+    if agent_key == "text_to_sql_agent":
+        last_user_msg = ""
+        for msg in reversed(messages):
+            if msg.__class__.__name__ == "HumanMessage":
+                last_user_msg = msg.content
+                break
+        
+        try:
+            response = httpx.post(
+                f"{os.getenv('TEXT2SQL_SERVICE_URL', 'http://text-to-sql-service:8002')}/query",
+                json={"question": last_user_msg, "user_id": "anonymous"},
+                timeout=60.0,
+            )
+            response.raise_for_status()
+            result = response.json()
+            yield result.get("explanation", "Query executed."), "text2sql_agent"
+        except Exception as e:
+            yield f"❌ Erreur service SQL : {str(e)}", "text2sql_agent"
+        return
+
+    system = SystemMessage(content=SYSTEM_PROMPTS.get(agent_key, SYSTEM_PROMPTS["fallback"]))
     messages_with_system = [system] + list(messages)
 
     for chunk in llm.stream(messages_with_system):

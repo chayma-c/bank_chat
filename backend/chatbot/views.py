@@ -55,8 +55,9 @@ class ChatView(APIView):
     def post(self, request):
         data       = request.data
         user_id    = data.get("user_id", "anonymous")
-        session_id = data.get("session_id", str(uuid.uuid4()))
-        message    = data.get("message")
+        message        = data.get("message")
+        selected_agent = data.get("agent") or data.get("selected_agent")  # Supporte 'agent' (frontend) ou 'selected_agent'
+        
 
         if not message:
             return Response({"error": "message requis"}, status=400)
@@ -69,13 +70,14 @@ class ChatView(APIView):
         conversation_messages = memory_manager.build_context(conversation, message)
 
         initial_state = {
-            "messages":   conversation_messages,
-            "user_id":    user_id,
-            "session_id": session_id,
-            "intent":     "",
-            "agent":      "",
-            "context":    {},
-            "error":      None,
+            "messages":       conversation_messages,
+            "user_id":        user_id,
+            "session_id":     session_id,
+            "intent":         "",
+            "agent":          "",
+            "selected_agent": selected_agent,
+            "context":        {},
+            "error":          None,
         }
 
         try:
@@ -148,8 +150,9 @@ class StreamChatView(View):
             )
 
         user_id    = data.get("user_id", "anonymous")
-        session_id = data.get("session_id", str(uuid.uuid4()))
-        message    = data.get("message", "").strip()
+        session_id     = data.get("session_id", str(uuid.uuid4()))
+        message        = data.get("message", "").strip()
+        selected_agent = data.get("agent") or data.get("selected_agent") # Supporte 'agent' ou 'selected_agent'
 
         if not message:
             return StreamingHttpResponse(
@@ -165,13 +168,14 @@ class StreamChatView(View):
         conversation_messages = memory_manager.build_context(conversation, message)
 
         initial_state: BankChatState = {
-            "messages":   conversation_messages,
-            "user_id":    user_id,
-            "session_id": session_id,
-            "intent":     "",
-            "agent":      "",
-            "context":    {},
-            "error":      None,
+            "messages":       conversation_messages,
+            "user_id":        user_id,
+            "session_id":     session_id,
+            "intent":         "",
+            "agent":          "",
+            "selected_agent": selected_agent,
+            "context":        {},
+            "error":          None,
         }
         intent_state = detect_intent(initial_state)
         intent       = intent_state["intent"]

@@ -81,16 +81,33 @@ def text_to_sql_agent(state: BankChatState) -> dict:
     Text-to-SQL agent node.
     Delegates to the text-to-sql-service microservice via HTTP.
     """
-    response = httpx.post(
-        f"{os.getenv('TEXT2SQL_SERVICE_URL', 'http://text-to-sql-service:8002')}/query",
-        json={"question": last_user_msg, "user_id": state["user_id"]},
-        timeout=60.0,
-    )
-    result = response.json()
-    return {
-        "messages": [AIMessage(content=result["explanation"])],
-        "agent": "text2sql_agent",
-    }
+    last_user_msg = ""
+    for msg in reversed(state["messages"]):
+        if hasattr(msg, "type") and msg.type == "human":
+            last_user_msg = msg.content
+            break
+        if msg.__class__.__name__ == "HumanMessage":
+            last_user_msg = msg.content
+            break
+
+    try:
+        response = httpx.post(
+            f"{os.getenv('TEXT2SQL_SERVICE_URL', 'http://text-to-sql-service:8002')}/query",
+            json={"question": last_user_msg, "user_id": state.get("user_id", "anonymous")},
+            timeout=60.0,
+        )
+        response.raise_for_status()
+        result = response.json()
+        return {
+            "messages": [AIMessage(content=result.get("explanation", "Query executed."))],
+            "agent": "text2sql_agent",
+        }
+    except Exception as e:
+        return {
+            "messages": [AIMessage(content=f"❌ Erreur service SQL : {str(e)}")],
+            "agent": "text2sql_agent",
+            "error": str(e),
+        }
 
 def create_graph():
     graph = StateGraph(BankChatState)
