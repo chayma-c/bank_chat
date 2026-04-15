@@ -14,11 +14,12 @@ import { FraudRule, RuleFormData, RiskDomain, Severity } from './fraud-rule.mode
   styleUrl:    './rule-modal.component.css',
 })
 export class RuleModalComponent implements OnInit {
-  @Input()  mode:      'create' | 'edit' | 'delete' = 'create';
-  @Input()  rule:      FraudRule | null = null;
-  @Output() saved    = new EventEmitter<RuleFormData>();
-  @Output() deleted  = new EventEmitter<void>();
-  @Output() closed   = new EventEmitter<void>();
+  @Input()  mode:    'create' | 'edit' | 'delete' = 'create';
+  @Input()  rule:    FraudRule | null = null;
+  @Input()  saving:  boolean = false;          // ← Input manquant — cause du build error
+  @Output() saved   = new EventEmitter<RuleFormData>();
+  @Output() deleted = new EventEmitter<void>();
+  @Output() closed  = new EventEmitter<void>();
 
   readonly domains:    RiskDomain[] = ['VELOCITY', 'LIMIT', 'GEOGRAPHIC', 'AML', 'BEHAVIORAL'];
   readonly severities: Severity[]   = ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'];
@@ -36,12 +37,14 @@ export class RuleModalComponent implements OnInit {
 
   pointsPreview = computed(() => {
     const p = this.form().points;
-    if (p >= 25) return { label: 'High impact', cls: 'impact-high' };
-    if (p >= 15) return { label: 'Medium impact', cls: 'impact-med' };
-    return { label: 'Low impact', cls: 'impact-low' };
+    if (p >= 25) return { label: 'High impact',   cls: 'impact-high' };
+    if (p >= 15) return { label: 'Medium impact', cls: 'impact-med'  };
+    return             { label: 'Low impact',     cls: 'impact-low'  };
   });
 
-  scoreBarWidth = computed(() => Math.min(100, Math.round(this.form().points / 35 * 100)) + '%');
+  scoreBarWidth = computed(() =>
+    Math.min(100, Math.round(this.form().points / 35 * 100)) + '%'
+  );
 
   ngOnInit(): void {
     if (this.rule && this.mode === 'edit') {
@@ -81,6 +84,8 @@ export class RuleModalComponent implements OnInit {
   get isDelete(): boolean { return this.mode === 'delete'; }
 
   get modalTitle(): string {
-    return this.isCreate ? 'Create new rule' : this.isEdit ? 'Edit rule' : 'Delete rule';
+    return this.isCreate ? 'Create new rule'
+         : this.isEdit   ? 'Edit rule'
+         :                 'Delete rule';
   }
 }

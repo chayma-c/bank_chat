@@ -35,7 +35,7 @@ Login with:
 
 1. Click the realm dropdown in the **top-left corner**
 2. Select **"Create realm"**
-3. Set **Realm name** to `myrealm`
+3. Set **Realm name** to ``
 4. Click **Create**
 
 ---

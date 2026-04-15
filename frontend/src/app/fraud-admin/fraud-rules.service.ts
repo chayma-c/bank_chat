@@ -1,157 +1,92 @@
 import { Injectable, inject, signal, computed } from '@angular/core';
-import { HttpClient }                            from '@angular/common/http';
-import { Observable, of, tap, catchError }      from 'rxjs';
+import { HttpClient, HttpErrorResponse }         from '@angular/common/http';
+import { Observable, throwError, tap }           from 'rxjs';
+import { catchError, map }                       from 'rxjs/operators';
 import { environment }                           from '../../environments/environment';
 import { FraudRule, RuleFormData, FraudMetrics } from './fraud-rule.model';
-
-// ── Default rules seeded from rules.py / scoring.py ──────────────────────────
-const DEFAULT_RULES: FraudRule[] = [
-  {
-    id: 'RL-001-LAR', name: 'Large or round amount',
-    domain: 'LIMIT', severity: 'HIGH',
-    trigger: 'Amount > 3,000 TND',
-    triggerDetail: 'Or suspicious round amounts (999, 1000, 5000…)',
-    points: 35, active: true,
-    description: 'Flags transactions above threshold or with suspicious round amounts used in fund-smuggling or card-testing fraud.',
-    createdAt: new Date().toISOString(),
-  },
-  {
-    id: 'RL-002-SIB', name: 'Suspicious IBAN check',
-    domain: 'AML', severity: 'HIGH',
-    trigger: 'Client / counterparty IBAN in blacklist',
-    triggerDetail: 'Known structuring or ML-prone accounts',
-    points: 35, active: true,
-    description: 'Checks client and counterparty IBANs against the configured suspicious IBAN list.',
-    createdAt: new Date().toISOString(),
-  },
-  {
-    id: 'RL-003-STR', name: 'Structuring pattern (AML)',
-    domain: 'AML', severity: 'CRITICAL',
-    trigger: '3+ txs of 850–950 TND within 24h',
-    triggerDetail: 'Same client IBAN in 24-hour sliding window',
-    points: 25, active: true,
-    description: 'Classic AML structuring detection — multiple near-threshold amounts to avoid reporting thresholds.',
-    createdAt: new Date().toISOString(),
-  },
-  {
-    id: 'RL-004-NGT', name: 'Night transfer alert',
-    domain: 'VELOCITY', severity: 'MEDIUM',
-    trigger: 'P2P / INTL transfer between 00:00–05:00',
-    triggerDetail: 'Unusual hour for high-value transfers',
-    points: 10, active: true,
-    description: 'Flags P2P and international transfers made during night hours when normal users rarely operate.',
-    createdAt: new Date().toISOString(),
-  },
-  {
-    id: 'RL-005-FIP', name: 'Foreign IP detection',
-    domain: 'GEOGRAPHIC', severity: 'HIGH',
-    trigger: 'IP starts with 185.230.x.x',
-    triggerDetail: '+ amount > 2,000 TND or customer risk score ≥ 70',
-    points: 25, active: true,
-    description: 'Detects transactions from known foreign IP ranges combined with high-risk account context.',
-    createdAt: new Date().toISOString(),
-  },
-  {
-    id: 'RL-006-MCC', name: 'High-risk merchant (MCC)',
-    domain: 'BEHAVIORAL', severity: 'MEDIUM',
-    trigger: 'MCC 5541 / 5999 / 5311 and amount > 1,500 TND',
-    triggerDetail: 'No recent pattern for this MCC on account',
-    points: 10, active: true,
-    description: 'Flags high-value purchases at merchant category codes statistically linked to fraud.',
-    createdAt: new Date().toISOString(),
-  },
-  {
-    id: 'RL-007-BAL', name: 'Balance drain pattern',
-    domain: 'BEHAVIORAL', severity: 'HIGH',
-    trigger: 'Amount > 80% of account current balance',
-    triggerDetail: 'Moving most of balance in one transaction',
-    points: 10, active: true,
-    description: 'Detects transactions that drain most of the account balance in a single operation.',
-    createdAt: new Date().toISOString(),
-  },
-  {
-    id: 'RL-008-ALT', name: 'Repeated alerts',
-    domain: 'VELOCITY', severity: 'HIGH',
-    trigger: '3+ ALERTED transactions in last 7 days',
-    triggerDetail: 'Same client IBAN recurring flags',
-    points: 20, active: false,
-    description: 'Detects ongoing risk profiles from repeated alert status on the same IBAN over a 7-day window.',
-    createdAt: new Date().toISOString(),
-  },
-];
 
 @Injectable({ providedIn: 'root' })
 export class FraudRulesService {
   private readonly http = inject(HttpClient);
-  private readonly base = `${environment.apiBaseUrl}/fraud/rules`;
 
-  // ── Local state (falls back to defaults when API unavailable) ────────────
-  private _rules = signal<FraudRule[]>(DEFAULT_RULES);
+  // Base URL of your FastAPI fraud service — set in environment.ts (fraudUrl)
+  private readonly base = `${environment.fraudUrl}/rules/`;
 
-  readonly rules          = this._rules.asReadonly();
-  readonly activeCount    = computed(() => this._rules().filter(r => r.active).length);
-  readonly totalPoints    = computed(() => this._rules().filter(r => r.active).reduce((s, r) => s + r.points, 0));
-  readonly metrics        = computed<FraudMetrics>(() => ({
+  // ── Reactive state ────────────────────────────────────────────────────────
+  private _rules   = signal<FraudRule[]>([]);
+  private _loading = signal<boolean>(false);
+  private _error   = signal<string | null>(null);
+
+  readonly rules   = this._rules.asReadonly();
+  readonly loading = this._loading.asReadonly();
+  readonly error   = this._error.asReadonly();
+
+  readonly activeCount = computed(() => this._rules().filter(r => r.active).length);
+
+  readonly metrics = computed<FraudMetrics>(() => ({
     activeProtocols:  this.activeCount(),
-    velocityFlags24h: 1892,
+    velocityFlags24h: 1892,        // replace with a real /stats endpoint later
     avgPrecisionRate: 98.4,
     totalRules:       this._rules().length,
   }));
 
-  // ── Load from API (graceful fallback to defaults) ────────────────────────
+  // ── Load all rules from backend ───────────────────────────────────────────
   loadRules(): void {
+    this._loading.set(true);
+    this._error.set(null);
+
     this.http.get<FraudRule[]>(this.base).pipe(
-      catchError(() => of(DEFAULT_RULES))
-    ).subscribe(rules => this._rules.set(rules));
+      catchError(err => this.handleError(err))
+    ).subscribe({
+      next:  rules => { this._rules.set(rules); this._loading.set(false); },
+      error: msg   => { this._error.set(msg);   this._loading.set(false); },
+    });
   }
 
   // ── Create ────────────────────────────────────────────────────────────────
   createRule(data: RuleFormData): Observable<FraudRule> {
-    const initials = data.name.split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 3);
-    const newRule: FraudRule = {
-      ...data,
-      id:        `RL-${String(Date.now()).slice(-6)}-${initials}`,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
-
-    return this.http.post<FraudRule>(this.base, newRule).pipe(
-      catchError(() => of(newRule)),
-      tap(rule => this._rules.update(rs => [...rs, rule]))
+    return this.http.post<FraudRule>(this.base, data).pipe(
+      tap(rule => this._rules.update(rs => [...rs, rule])),
+      catchError(err => this.handleError(err))
     );
   }
 
-  // ── Update ────────────────────────────────────────────────────────────────
+  // ── Update (full) ─────────────────────────────────────────────────────────
   updateRule(id: string, data: Partial<FraudRule>): Observable<FraudRule> {
-    const current = this._rules().find(r => r.id === id)!;
-    const updated: FraudRule = { ...current, ...data, updatedAt: new Date().toISOString() };
-
-    return this.http.put<FraudRule>(`${this.base}/${id}`, updated).pipe(
-      catchError(() => of(updated)),
-      tap(rule => this._rules.update(rs => rs.map(r => r.id === id ? rule : r)))
+    return this.http.put<FraudRule>(`${this.base}/${id}`, data).pipe(
+      tap(updated => this._rules.update(rs => rs.map(r => r.id === id ? updated : r))),
+      catchError(err => this.handleError(err))
     );
   }
 
-  // ── Toggle active ─────────────────────────────────────────────────────────
+  // ── Toggle active — PATCH (lightweight, no full reload) ───────────────────
   toggleRule(id: string, active: boolean): void {
+    // Optimistic UI update first
     this._rules.update(rs => rs.map(r => r.id === id ? { ...r, active } : r));
-    this.http.patch(`${this.base}/${id}`, { active }).pipe(catchError(() => of(null))).subscribe();
+
+    this.http.patch<FraudRule>(`${this.base}/${id}`, { active }).pipe(
+      catchError(err => {
+        // Rollback on failure
+        this._rules.update(rs => rs.map(r => r.id === id ? { ...r, active: !active } : r));
+        return this.handleError(err);
+      })
+    ).subscribe();
   }
 
   // ── Delete ────────────────────────────────────────────────────────────────
   deleteRule(id: string): Observable<void> {
     return this.http.delete<void>(`${this.base}/${id}`).pipe(
-      catchError(() => of(undefined)),
-      tap(() => this._rules.update(rs => rs.filter(r => r.id !== id)))
+      tap(() => this._rules.update(rs => rs.filter(r => r.id !== id))),
+      catchError(err => this.handleError(err))
     );
   }
 
-  // ── Filter helper ─────────────────────────────────────────────────────────
+  // ── Filter (pure — no HTTP) ───────────────────────────────────────────────
   filterRules(domain: string, status: string, search: string): FraudRule[] {
     return this._rules().filter(r => {
-      if (domain && r.domain !== domain)                          return false;
-      if (status === 'active'  && !r.active)                     return false;
-      if (status === 'paused'  &&  r.active)                     return false;
+      if (domain && r.domain !== domain)           return false;
+      if (status === 'active' && !r.active)        return false;
+      if (status === 'paused' &&  r.active)        return false;
       if (search) {
         const q = search.toLowerCase();
         if (!r.name.toLowerCase().includes(q) &&
@@ -160,5 +95,16 @@ export class FraudRulesService {
       }
       return true;
     });
+  }
+
+  // ── Error handling ────────────────────────────────────────────────────────
+  private handleError(err: HttpErrorResponse): Observable<never> {
+    let msg = 'An unexpected error occurred';
+    if (err.status === 0)   msg = 'Cannot reach the fraud service. Check network / CORS.';
+    if (err.status === 404) msg = 'Rule not found.';
+    if (err.status === 422) msg = 'Validation error: ' + JSON.stringify(err.error?.detail ?? '');
+    if (err.status >= 500)  msg = 'Server error. Please try again.';
+    console.error('[FraudRulesService]', err);
+    return throwError(() => msg);
   }
 }

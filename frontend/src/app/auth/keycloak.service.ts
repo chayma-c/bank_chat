@@ -1,12 +1,12 @@
 import { Injectable } from '@angular/core';
 import Keycloak from 'keycloak-js';
 import { environment } from '../../environments/environment';
-
+//singleton
 @Injectable({ providedIn: 'root' })
 export class KeycloakService {
   private static kc: Keycloak = new Keycloak({
-    url:      environment.keycloak.url,
-    realm:    environment.keycloak.realm,
+    url: environment.keycloak.url,
+    realm: environment.keycloak.realm,
     clientId: environment.keycloak.clientId,
   });
   private static _authenticated = false;
@@ -14,9 +14,9 @@ export class KeycloakService {
   /** Call once from main.ts before Angular bootstraps */
   static async init(): Promise<boolean> {
     KeycloakService._authenticated = await KeycloakService.kc.init({
-      onLoad:           'login-required',
+      onLoad: 'login-required',
       checkLoginIframe: false,
-      pkceMethod:       'S256',
+      pkceMethod: 'S256',
     });
 
     if (KeycloakService._authenticated) {
@@ -53,6 +53,15 @@ export class KeycloakService {
   /** Extracts the first letter of the username for the avatar */
   get userInitial(): string {
     return this.username.charAt(0).toUpperCase();
+  }
+
+  get isAdmin(): boolean {
+    // Check if the user has the 'admin' role either globally (realm role)
+    // or specifically for this application client (resource/client role).
+    const isAdm = KeycloakService.kc.hasRealmRole('admin') || KeycloakService.kc.hasResourceRole('admin');
+    console.log('DEBUG: Kc parsed token:', KeycloakService.kc.tokenParsed);
+    console.log('DEBUG: Evaluated isAdmin:', isAdm);
+    return isAdm;
   }
 
   logout(): void {

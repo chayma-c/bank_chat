@@ -20,7 +20,7 @@
         </span>
         <h2 class="modal-title">{{ modalTitle }}</h2>
       </div>
-      <button class="modal-close" (click)="close()">
+      <button class="modal-close" (click)="close()" [disabled]="saving">
         <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
           <path d="M2 2l12 12M14 2L2 14"/>
         </svg>
@@ -52,12 +52,18 @@
         </div>
       </div>
       <div class="modal-footer">
-        <button class="btn-cancel" (click)="close()">Cancel</button>
-        <button class="btn-danger" (click)="confirmDelete()">
-          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M2 4h12M5 4V2h6v2M3 4l1 9h8l1-9"/>
-          </svg>
-          Delete rule
+        <button class="btn-cancel" (click)="close()" [disabled]="saving">Cancel</button>
+        <button class="btn-danger" (click)="confirmDelete()" [disabled]="saving">
+          <ng-container *ngIf="!saving">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M2 4h12M5 4V2h6v2M3 4l1 9h8l1-9"/>
+            </svg>
+            Delete rule
+          </ng-container>
+          <ng-container *ngIf="saving">
+            <span class="spinner"></span>
+            Deleting…
+          </ng-container>
         </button>
       </div>
     </ng-container>
@@ -75,6 +81,7 @@
             [value]="form().name"
             (input)="updateField('name', $any($event.target).value)"
             placeholder="e.g. Large amount check"
+            [disabled]="saving"
           />
         </div>
 
@@ -83,14 +90,16 @@
           <div class="form-group">
             <label class="form-label">Risk domain</label>
             <select class="form-select" [value]="form().domain"
-              (change)="updateField('domain', $any($event.target).value)">
+              (change)="updateField('domain', $any($event.target).value)"
+              [disabled]="saving">
               <option *ngFor="let d of domains" [value]="d">{{ d }}</option>
             </select>
           </div>
           <div class="form-group">
             <label class="form-label">Severity</label>
             <select class="form-select" [value]="form().severity"
-              (change)="updateField('severity', $any($event.target).value)">
+              (change)="updateField('severity', $any($event.target).value)"
+              [disabled]="saving">
               <option *ngFor="let s of severities" [value]="s">{{ s }}</option>
             </select>
           </div>
@@ -105,6 +114,7 @@
             [value]="form().trigger"
             (input)="updateField('trigger', $any($event.target).value)"
             placeholder="e.g. Amount > 3,000 TND"
+            [disabled]="saving"
           />
         </div>
 
@@ -117,6 +127,7 @@
             [value]="form().triggerDetail"
             (input)="updateField('triggerDetail', $any($event.target).value)"
             placeholder="Additional condition context"
+            [disabled]="saving"
           />
         </div>
 
@@ -136,6 +147,7 @@
             step="5"
             [value]="form().points"
             (input)="updateField('points', +$any($event.target).value)"
+            [disabled]="saving"
           />
           <div class="score-bar-wrap">
             <div class="score-bar">
@@ -155,6 +167,7 @@
             [value]="form().description"
             (input)="updateField('description', $any($event.target).value)"
             placeholder="What this rule detects and why it matters…"
+            [disabled]="saving"
           ></textarea>
         </div>
 
@@ -166,6 +179,7 @@
                 type="checkbox"
                 [checked]="form().active"
                 (change)="updateField('active', $any($event.target).checked)"
+                [disabled]="saving"
               />
               <span class="toggle-track"></span>
             </span>
@@ -184,10 +198,16 @@
       </div>
 
       <div class="modal-footer">
-        <button class="btn-cancel" (click)="close()">Cancel</button>
+        <button class="btn-cancel" (click)="close()" [disabled]="saving">Cancel</button>
         <button class="btn-primary" (click)="submit()"
-          [disabled]="!form().name.trim() || !form().trigger.trim()">
-          {{ isCreate ? 'Create rule' : 'Save changes' }}
+          [disabled]="saving || !form().name.trim() || !form().trigger.trim()">
+          <ng-container *ngIf="!saving">
+            {{ isCreate ? 'Create rule' : 'Save changes' }}
+          </ng-container>
+          <ng-container *ngIf="saving">
+            <span class="spinner"></span>
+            {{ isCreate ? 'Creating…' : 'Saving…' }}
+          </ng-container>
         </button>
       </div>
     </ng-container>

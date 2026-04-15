@@ -1,64 +1,68 @@
+"""
+BankChat Fraud Service — main FastAPI application.
+"""
+
 import re
 import os
+import logging
+from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
+
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from langchain_core.messages import HumanMessage
-from fraud.graph import run_fraud_agent
-from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
-from typing import Optional
 
-router = APIRouter(prefix="/fraud/rules", tags=["fraud-rules"])
-app = FastAPI(title="BankChat Fraud Service", version="1.0.0")
+from fraud.database     import SessionLocal, Base, engine
+from fraud.models       import FraudRuleModel        # noqa: F401
+from fraud.crud         import seed_default_rules
+from fraud.rules_router import router as rules_router
+from fraud.graph        import run_fraud_agent
 
-class FraudRuleSchema(BaseModel):
-    id:            Optional[str] = None
-    name:          str
-    domain:        str
-    trigger:       str
-    triggerDetail: str
-    points:        int
-    severity:      str
-    active:        bool
-    description:   str
+logger = logging.getLogger(__name__)
 
-# In-memory store (replace with DB in production)
-_rules: list[dict] = []
 
-@router.get("/")
-def list_rules():
-    return _rules
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    try:
+        Base.metadata.create_all(bind=engine)
+        logger.info("Database tables verified/created.")
+    except Exception as e:
+        logger.error(f"Could not create tables: {e}")
 
-@router.post("/")
-def create_rule(rule: FraudRuleSchema):
-    _rules.append(rule.dict())
-    return rule
+    try:
+        db = SessionLocal()
+        try:
+            seed_default_rules(db)
+            logger.info("Default fraud rules seeded.")
+        finally:
+            db.close()
+    except Exception as e:
+        logger.error(f"Could not seed default rules: {e}")
 
-@router.put("/{rule_id}")
-def update_rule(rule_id: str, rule: FraudRuleSchema):
-    for i, r in enumerate(_rules):
-        if r["id"] == rule_id:
-            _rules[i] = rule.dict()
-            return rule
-    raise HTTPException(404, "Rule not found")
+    yield
+    logger.info("Fraud service shutting down.")
 
-@router.patch("/{rule_id}")
-def patch_rule(rule_id: str, data: dict):
-    for r in _rules:
-        if r["id"] == rule_id:
-            r.update(data)
-            return r
-    raise HTTPException(404, "Rule not found")
 
-@router.delete("/{rule_id}")
-def delete_rule(rule_id: str):
-    global _rules
-    _rules = [r for r in _rules if r["id"] != rule_id]
-    return {"deleted": rule_id}
+app = FastAPI(title="BankChat Fraud Service", version="2.0.0", lifespan=lifespan)
 
+ALLOWED_ORIGINS = os.getenv(
+    "CORS_ORIGINS",
+    "http://localhost:4200,http://localhost"
+).split(",")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=ALLOWED_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# nginx strips /fraud/ prefix → FastAPI receives /rules/...
+app.include_router(rules_router)
 
 
 def _reports_dir() -> Path:
@@ -67,14 +71,13 @@ def _reports_dir() -> Path:
     return d
 
 
-# ── IBAN extraction ───────────────────────────────────────────────────────────
-
 IBAN_PATTERN = re.compile(
     r"\b([A-Z]{2}\d{2}[\s]?[\dA-Z]{4}[\s]?[\dA-Z]{4}[\s]?[\dA-Z]{4}[\s]?[\dA-Z]{0,16})\b"
     r"|"
     r"\b(IBAN_[A-Z]{2}\d+)\b",
     re.IGNORECASE,
 )
+
 
 def extract_iban_from_text(text: str) -> str:
     if not text:
@@ -85,8 +88,6 @@ def extract_iban_from_text(text: str) -> str:
     return ""
 
 
-# ── Schéma de requête ─────────────────────────────────────────────────────────
-
 class FraudRequest(BaseModel):
     iban:       str = ""
     message:    str = ""
@@ -96,21 +97,15 @@ class FraudRequest(BaseModel):
     excel_path: str = ""
 
 
-# ── Endpoints ─────────────────────────────────────────────────────────────────
-
 @app.post("/analyze")
 async def analyze(req: FraudRequest):
     iban = req.iban or extract_iban_from_text(req.message)
-
     if req.message:
         user_content = req.message
     elif iban:
         user_content = f"Analyse les fraudes pour l'IBAN {iban}"
     else:
-        return {
-            "error": "IBAN requis. Fournissez un IBAN valide dans 'iban' ou dans 'message'.",
-            "llm_summary": "❌ IBAN non fourni.",
-        }
+        return {"error": "IBAN requis.", "llm_summary": "❌ IBAN non fourni."}
 
     messages = [HumanMessage(content=user_content)]
     result = run_fraud_agent(
@@ -119,7 +114,6 @@ async def analyze(req: FraudRequest):
         session_id=req.session_id,
         excel_path=req.excel_path or "",
     )
-
     return {
         "iban":               result.get("iban", iban),
         "action":             result.get("action", req.action),
@@ -143,14 +137,11 @@ async def analyze(req: FraudRequest):
 
 @app.get("/reports/{filename}")
 async def download_report(filename: str):
-    """Télécharge un rapport Excel généré."""
     if ".." in filename or "/" in filename or "\\" in filename:
         raise HTTPException(status_code=400, detail="Nom de fichier invalide.")
-
     filepath = _reports_dir() / filename
     if not filepath.is_file():
         raise HTTPException(status_code=404, detail=f"Rapport non trouvé : {filename}")
-
     return FileResponse(
         path=str(filepath),
         filename=filename,
@@ -160,10 +151,9 @@ async def download_report(filename: str):
 
 @app.get("/reports")
 async def list_reports():
-    """Liste tous les rapports disponibles."""
     reports_dir = _reports_dir()
     files = sorted(reports_dir.glob("*.xlsx"), key=lambda f: f.stat().st_mtime, reverse=True)
-    base  = os.getenv("FRAUD_SERVICE_PUBLIC_URL", "http://localhost:8001").rstrip("/")
+    base = os.getenv("FRAUD_SERVICE_PUBLIC_URL", "http://localhost:8001").rstrip("/")
     return {
         "reports": [
             {
@@ -184,7 +174,7 @@ def health():
     return {
         "status":        "ok",
         "service":       "fraud-service",
-        "version":       "1.0.0",
+        "version":       "2.0.0",
         "reports_dir":   str(reports_dir),
         "reports_count": len(list(reports_dir.glob("*.xlsx"))) if reports_dir.exists() else 0,
     }

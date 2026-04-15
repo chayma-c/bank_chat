@@ -20,42 +20,49 @@ type ModalMode = 'create' | 'edit' | 'delete';
 export class FraudAdminComponent implements OnInit {
   private svc = inject(FraudRulesService);
 
-  // ── State ─────────────────────────────────────────────────────────────────
+  // ── Filters ───────────────────────────────────────────────────────────────
   domainFilter = signal<string>('');
   statusFilter = signal<string>('');
   searchQuery  = signal<string>('');
 
+  // ── Modal ─────────────────────────────────────────────────────────────────
   modalMode    = signal<ModalMode | null>(null);
   selectedRule = signal<FraudRule | null>(null);
+  saving       = signal<boolean>(false);
 
-  toast        = signal<{ msg: string; type: 'success' | 'error' } | null>(null);
+  // ── Toast ─────────────────────────────────────────────────────────────────
+  toast = signal<{ msg: string; type: 'success' | 'error' } | null>(null);
 
-  // ── Derived ───────────────────────────────────────────────────────────────
-  metrics      = this.svc.metrics;
-  activeCount  = this.svc.activeCount;
+  // ── Exposed from service ──────────────────────────────────────────────────
+  readonly metrics     = this.svc.metrics;
+  readonly loading     = this.svc.loading;
+  readonly loadingError = this.svc.error;
 
-  filteredRules = computed(() =>
+  readonly filteredRules = computed(() =>
     this.svc.filterRules(this.domainFilter(), this.statusFilter(), this.searchQuery())
   );
 
   readonly domains: RiskDomain[] = ['VELOCITY', 'LIMIT', 'GEOGRAPHIC', 'AML', 'BEHAVIORAL'];
 
+  // ── Lifecycle ─────────────────────────────────────────────────────────────
   ngOnInit(): void {
     this.svc.loadRules();
   }
 
-  // ── Modal actions ─────────────────────────────────────────────────────────
+  // ── Modal open/close ──────────────────────────────────────────────────────
   openCreate(): void {
     this.selectedRule.set(null);
     this.modalMode.set('create');
   }
 
-  openEdit(rule: FraudRule): void {
+  openEdit(rule: FraudRule, event: Event): void {
+    event.stopPropagation();
     this.selectedRule.set(rule);
     this.modalMode.set('edit');
   }
 
-  openDelete(rule: FraudRule): void {
+  openDelete(rule: FraudRule, event: Event): void {
+    event.stopPropagation();
     this.selectedRule.set(rule);
     this.modalMode.set('delete');
   }
@@ -63,19 +70,24 @@ export class FraudAdminComponent implements OnInit {
   closeModal(): void {
     this.modalMode.set(null);
     this.selectedRule.set(null);
+    this.saving.set(false);
   }
 
+  // ── CRUD handlers ─────────────────────────────────────────────────────────
   onSave(data: RuleFormData): void {
+    this.saving.set(true);
     const mode = this.modalMode();
+
     if (mode === 'create') {
       this.svc.createRule(data).subscribe({
-        next: () => { this.closeModal(); this.showToast('Rule created successfully', 'success'); },
-        error: ()  => this.showToast('Failed to create rule', 'error'),
+        next:  () => { this.closeModal(); this.showToast('Rule created successfully', 'success'); },
+        error: (msg: string) => { this.saving.set(false); this.showToast(msg, 'error'); },
       });
+
     } else if (mode === 'edit' && this.selectedRule()) {
       this.svc.updateRule(this.selectedRule()!.id, data).subscribe({
-        next: () => { this.closeModal(); this.showToast('Rule updated successfully', 'success'); },
-        error: ()  => this.showToast('Failed to update rule', 'error'),
+        next:  () => { this.closeModal(); this.showToast('Rule updated successfully', 'success'); },
+        error: (msg: string) => { this.saving.set(false); this.showToast(msg, 'error'); },
       });
     }
   }
@@ -83,9 +95,11 @@ export class FraudAdminComponent implements OnInit {
   onDelete(): void {
     const rule = this.selectedRule();
     if (!rule) return;
+    this.saving.set(true);
+
     this.svc.deleteRule(rule.id).subscribe({
-      next: () => { this.closeModal(); this.showToast('Rule deleted', 'success'); },
-      error: ()  => this.showToast('Failed to delete rule', 'error'),
+      next:  () => { this.closeModal(); this.showToast('Rule deleted', 'success'); },
+      error: (msg: string) => { this.saving.set(false); this.showToast(msg, 'error'); },
     });
   }
 
@@ -93,7 +107,11 @@ export class FraudAdminComponent implements OnInit {
     this.svc.toggleRule(rule.id, active);
   }
 
-  // ── Helpers ───────────────────────────────────────────────────────────────
+  retryLoad(): void {
+    this.svc.loadRules();
+  }
+
+  // ── Visual helpers ────────────────────────────────────────────────────────
   impactBarWidth(pts: number): string {
     return Math.min(100, Math.round(pts / 35 * 100)) + '%';
   }
@@ -114,6 +132,6 @@ export class FraudAdminComponent implements OnInit {
 
   private showToast(msg: string, type: 'success' | 'error'): void {
     this.toast.set({ msg, type });
-    setTimeout(() => this.toast.set(null), 3000);
+    setTimeout(() => this.toast.set(null), 3500);
   }
 }

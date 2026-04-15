@@ -165,10 +165,10 @@ def filter_by_iban(df: pd.DataFrame, iban: str) -> pd.DataFrame:
     Filter transactions for a specific IBAN.
 
     Searches in all IBAN-like columns:
-      - counterparty_iban  (new schema — destination account)
-      - client_iban        (new schema — source account)
+      - counterparty_iban  
+      - client_iban        
     """
-    iban_clean = iban.strip().upper()
+    iban_clean = iban.strip().upper() #possible issue in filtering
 
     iban_columns = [
         "counterparty_iban",
