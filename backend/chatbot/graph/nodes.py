@@ -86,6 +86,14 @@ SYSTEM_PROMPTS = {
         "If a question is completely unrelated to banking or finance, politely let the customer know "
         "you are specialized in banking services and redirect them appropriately."
     ),
+    "fraud_agent": (
+        "You are BankChat, a specialized expert in banking security and fraud detection. "
+        "Your role is to help users identify potential scams, explain security measures, "
+        "and provide guidance on how to stay safe. "
+        "You can also perform technical analysis on IBANs or transactions if requested. "
+        "Be alarming but professional when a potential risk is detected, and always provide "
+        "clear, actionable security advice."
+    ),
 }
 
 # ── Intent detection ──────────────────────────────────────────────────────────
@@ -195,6 +203,84 @@ def transfer_agent(state: BankChatState) -> BankChatState:
 def support_agent(state: BankChatState) -> BankChatState:
     return _run_agent(state, "support_agent")
 
+def fraud_agent(state: BankChatState) -> BankChatState:
+    """
+    Smart Fraud Agent node for LangGraph.
+    Decides between technical analysis and expert advice.
+    """
+    last_msg = ""
+    for msg in reversed(state["messages"]):
+        if msg.__class__.__name__ == "HumanMessage":
+            last_msg = msg.content
+            break
+    
+    decision_prompt = (
+        "You are a fraud detection reasoning engine. "
+        "Based on the user's message, decide if we need to call a technical tool (ANALYZE) "
+        "to check an IBAN/transaction, or if we should just respond as an expert (TALK).\n\n"
+        f"Message: {last_msg}\n\n"
+        "Rules:\n"
+        "- ANALYZE: If there is an IBAN, a specific transaction to check, or a request for deep scan.\n"
+        "- TALK: If it's a general question, a request for advice, or an explanation of concepts.\n\n"
+        "Your answer must be in this format:\n"
+        "REASONING: <brief explanation>\n"
+        "DECISION: <ANALYZE or TALK>"
+    )
+
+    try:
+        decision_resp = llm.invoke(decision_prompt).content
+        lines = decision_resp.strip().split("\n")
+        reasoning = "Analyse de la requête..."
+        decision  = "TALK"
+        for line in lines:
+            if line.upper().startswith("REASONING:"):
+                reasoning = line.split(":", 1)[1].strip()
+            if line.upper().startswith("DECISION:"):
+                decision = "ANALYZE" if "ANALYZE" in line.upper() else "TALK"
+
+        prefix = f"💡 *{reasoning}*\n\n---\n\n"
+
+        if decision == "ANALYZE":
+            iban = extract_iban(state["messages"])
+            response = httpx.post(
+                f"{FRAUD_SERVICE_URL}/analyze",
+                json={
+                    "message":    last_msg,
+                    "iban":       iban,
+                    "action":     "fraud_check",
+                    "user_id":    state.get("user_id", "anonymous"),
+                    "session_id": state.get("session_id", ""),
+                    "excel_path": "",
+                },
+                timeout=120.0,
+            )
+            response.raise_for_status()
+            result = response.json()
+            ai_response = prefix + (result.get("llm_summary") or result.get("summary") or "Analyse terminée.")
+            return {
+                **state,
+                "messages": [AIMessage(content=ai_response)],
+                "agent":    "fraud_agent",
+                "context":  result
+            }
+        else:
+            # Path : TALK
+            system = SystemMessage(content=SYSTEM_PROMPTS["fraud_agent"])
+            messages_with_system = [system] + list(state["messages"])
+            response = llm.invoke(messages_with_system)
+            return {
+                **state,
+                "messages": [AIMessage(content=prefix + response.content)],
+                "agent":    "fraud_agent",
+            }
+
+    except Exception as e:
+        return {
+            **state,
+            "messages": [AIMessage(content=f"❌ Erreur agent fraude : {str(e)}")],
+            "agent":    "fraud_agent",
+        }
+
 def handle_fallback(state: BankChatState) -> BankChatState:
     return _run_agent(state, "fallback")
 
@@ -208,38 +294,69 @@ def stream_agent_response(intent: str, messages: list):
     Pour les autres agents : streaming LLM natif.
     """
     if intent == "fraud":
-        # Extraire l'IBAN du dernier message utilisateur
-        iban = extract_iban(messages)
-
-        # Récupérer le texte brut du dernier message pour l'envoyer au service
+        # 1. Décision : Analyse technique ou Discussion d'expert ?
         last_msg = ""
         for msg in reversed(messages):
             if msg.__class__.__name__ == "HumanMessage":
                 last_msg = msg.content
                 break
 
-        try:
-            response = httpx.post(
-                f"{FRAUD_SERVICE_URL}/analyze",
-                json={
-                    "message":    last_msg,
-                    "iban":       iban,
-                    "action":     "fraud_check",
-                    "user_id":    "anonymous",
-                    "session_id": "",
-                    "excel_path": "",
-                },
-                timeout=120.0,
-            )
-            response.raise_for_status()
-            result  = response.json()
-            summary = result.get("llm_summary", result.get("summary", "Analyse de fraude terminée."))
-        except httpx.TimeoutException:
-            summary = "⏱️ Le service de fraude a mis trop de temps à répondre. Réessayez."
-        except Exception as e:
-            summary = f"❌ Erreur service de fraude : {str(e)}"
+        decision_prompt = (
+            "You are a fraud detection reasoning engine. "
+            "Based on the user's message, decide if we need to call a technical tool (ANALYZE) "
+            "to check an IBAN/transaction, or if we should just respond as an expert (TALK).\n\n"
+            f"Message: {last_msg}\n\n"
+            "Rules:\n"
+            "- ANALYZE: If there is an IBAN, a specific transaction to check, or a request for deep scan.\n"
+            "- TALK: If it's a general question, a request for advice, or an explanation of concepts.\n\n"
+            "Your answer must be in this format:\n"
+            "REASONING: <brief explanation in French>\n"
+            "DECISION: <ANALYZE or TALK>"
+        )
 
-        yield summary, "fraud_agent"
+        try:
+            decision_resp = llm.invoke(decision_prompt).content
+            lines = decision_resp.strip().split("\n")
+            reasoning = "Analyse de la requête..."
+            decision  = "TALK"
+            
+            for line in lines:
+                if line.upper().startswith("REASONING:"):
+                    reasoning = line.split(":", 1)[1].strip()
+                if line.upper().startswith("DECISION:"):
+                    decision = "ANALYZE" if "ANALYZE" in line.upper() else "TALK"
+
+            yield f"💡 *{reasoning}*\n\n---\n\n", "fraud_agent"
+
+            if decision == "ANALYZE":
+                iban = extract_iban(messages)
+                response = httpx.post(
+                    f"{FRAUD_SERVICE_URL}/analyze",
+                    json={
+                        "message":    last_msg,
+                        "iban":       iban,
+                        "action":     "fraud_check",
+                        "user_id":    "anonymous",
+                        "session_id": "",
+                        "excel_path": "",
+                    },
+                    timeout=120.0,
+                )
+                response.raise_for_status()
+                result  = response.json()
+                summary = result.get("llm_summary", result.get("summary", "Analyse de fraude terminée."))
+                yield summary, "fraud_agent"
+            else:
+                # Path : TALK (Expert advice)
+                system = SystemMessage(content=SYSTEM_PROMPTS["fraud_agent"])
+                messages_with_system = [system] + list(messages)
+                for chunk in llm.stream(messages_with_system):
+                    token = chunk.content
+                    if token:
+                        yield token, "fraud_agent"
+
+        except Exception as e:
+            yield f"❌ Erreur lors de la décision : {str(e)}", "fraud_agent"
         return
 
     # Agents classiques — streaming token par token
