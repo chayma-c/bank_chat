@@ -109,9 +109,11 @@ export class ChatComponent implements OnInit, AfterViewChecked {
   }
 
   private scrollToBottom(): void {
-    try {
-      this.messagesEnd.nativeElement.scrollIntoView({ behavior: 'auto', block: 'end' });
-    } catch { }
+    if (!this.messagesArea) return;
+    const container = this.messagesArea.nativeElement;
+    requestAnimationFrame(() => {
+      container.scrollTop = container.scrollHeight;
+    });
   }
 
   loadConversations(): void {
