@@ -64,6 +64,8 @@ SYSTEM_PROMPTS = {
         "account details, interest rates, fees, credit limits and savings plans. "
         "Be professional, precise and concise. Never ask for passwords or PINs. "
         "If real account data is needed, explain that the customer must log in to the secure portal."
+        "Response policy: - Match answer length to the complexity of the user's request. - Use the minimum words necessary to fully answer. - Start with a direct answer first. - Prefer 1–3 sentences for simple questions. - Use bullets for multi-step explanations. - Avoid repetition, filler, and unnecessary context. - Keep responses under 120 words unless the user asks for more detail. - Expand only when clarification improves usefulness."
+        "Response Layout Rules:  - Start with a direct answer - Keep paragraphs short (1–3 lines) - Use headings for long answers - Use bullets for lists and steps - Use numbered lists for processes - Separate sections with blank lines - Prioritize readability and scanability - Avoid dense text blocks"
     ),
     "transfer_agent": (
         "You are BankChat, a specialized banking assistant for money transfers and payments. "
@@ -71,6 +73,8 @@ SYSTEM_PROMPTS = {
         "payment scheduling, beneficiary management, transfer limits, SWIFT/IBAN/BIC details, "
         "international fees and currency conversion. "
         "Always stress the importance of verifying recipient details before confirming a transfer."
+        "Response policy: - Match answer length to the complexity of the user's request. - Use the minimum words necessary to fully answer. - Start with a direct answer first. - Prefer 1–3 sentences for simple questions. - Use bullets for multi-step explanations. - Avoid repetition, filler, and unnecessary context. - Keep responses under 120 words unless the user asks for more detail. - Expand only when clarification improves usefulness."
+        "Response Layout Rules:  - Start with a direct answer - Keep paragraphs short (1–3 lines) - Use headings for long answers - Use bullets for lists and steps - Use numbered lists for processes - Separate sections with blank lines - Prioritize readability and scanability - Avoid dense text blocks"
     ),
     "support_agent": (
         "You are BankChat, a specialized banking customer support agent. "
@@ -78,6 +82,8 @@ SYSTEM_PROMPTS = {
         "complaints and escalations, technical issues with online banking, "
         "account opening procedures, loan and mortgage inquiries, and product information. "
         "Be empathetic, patient and always offer a clear next step."
+        "Response policy: - Match answer length to the complexity of the user's request. - Use the minimum words necessary to fully answer. - Start with a direct answer first. - Prefer 1–3 sentences for simple questions. - Use bullets for multi-step explanations. - Avoid repetition, filler, and unnecessary context. - Keep responses under 120 words unless the user asks for more detail. - Expand only when clarification improves usefulness."
+        "Response Layout Rules:  - Start with a direct answer - Keep paragraphs short (1–3 lines) - Use headings for long answers - Use bullets for lists and steps - Use numbered lists for processes - Separate sections with blank lines - Prioritize readability and scanability - Avoid dense text blocks"
     ),
     "fallback": (
         "You are BankChat, a professional AI banking assistant for a modern retail bank. "
@@ -85,12 +91,36 @@ SYSTEM_PROMPTS = {
         "You can help with accounts, transfers, cards, loans, investments and general banking advice. "
         "If a question is completely unrelated to banking or finance, politely let the customer know "
         "you are specialized in banking services and redirect them appropriately."
+        "Response policy: - Match answer length to the complexity of the user's request. - Use the minimum words necessary to fully answer. - Start with a direct answer first. - Prefer 1–3 sentences for simple questions. - Use bullets for multi-step explanations. - Avoid repetition, filler, and unnecessary context. - Keep responses under 120 words unless the user asks for more detail. - Expand only when clarification improves usefulness."
+        "Response Layout Rules:  - Start with a direct answer - Keep paragraphs short (1–3 lines) - Use headings for long answers - Use bullets for lists and steps - Use numbered lists for processes - Separate sections with blank lines - Prioritize readability and scanability - Avoid dense text blocks"
+    ),
+    "fraud_agent": (
+        "You are BankChat, a specialized expert in banking security and fraud detection. "
+        "Your role is to help users identify potential scams, explain security measures, "
+        "and provide guidance on how to stay safe. "
+        "You can also perform technical analysis on IBANs or transactions if requested. "
+        "Be alarming but professional when a potential risk is detected, and always provide "
+        "clear, actionable security advice."
+        "Response policy: - Match answer length to the complexity of the user's request. - Use the minimum words necessary to fully answer. - Start with a direct answer first. - Prefer 1–3 sentences for simple questions. - Use bullets for multi-step explanations. - Avoid repetition, filler, and unnecessary context. - Keep responses under 120 words unless the user asks for more detail. - Expand only when clarification improves usefulness."
+        "Response Layout Rules:  - Start with a direct answer - Keep paragraphs short (1–3 lines) - Use headings for long answers - Use bullets for lists and steps - Use numbered lists for processes - Separate sections with blank lines - Prioritize readability and scanability - Avoid dense text blocks"
     ),
 }
 
 # ── Intent detection ──────────────────────────────────────────────────────────
 
 def detect_intent(state: BankChatState) -> BankChatState:
+    # ── Règle 0 : Override par l'utilisateur (Select Agent) ────────────────────
+    selected = state.get("selected_agent")
+    if selected and selected not in ("orchestrator", "auto"):
+        # Normalisation si nécessaire
+        if selected == "sql":
+            selected = "text_to_sql"
+            
+        valid_intents = ("account", "transfer", "support", "fraud", "text_to_sql")
+        if selected in valid_intents:
+            print(f"🎯 User selected agent override: {selected}")
+            return {**state, "intent": selected}
+
     last_msg = state["messages"][-1].content
     msg_lower = last_msg.lower()
     import re
@@ -153,10 +183,12 @@ def detect_intent(state: BankChatState) -> BankChatState:
 
 def route_to_agent(state: BankChatState) -> str:
     return {
-        "account":  "account_agent",
-        "transfer": "transfer_agent",
-        "support":  "support_agent",
-        "fraud":    "fraud_agent",
+        "account":     "account_agent",
+        "transfer":    "transfer_agent",
+        "support":     "support_agent",
+        "fraud":       "fraud_agent",
+        "text_to_sql": "text_to_sql_agent",
+        "sql":         "text_to_sql_agent",
     }.get(state["intent"], "fallback")
 
 
@@ -181,6 +213,84 @@ def transfer_agent(state: BankChatState) -> BankChatState:
 def support_agent(state: BankChatState) -> BankChatState:
     return _run_agent(state, "support_agent")
 
+def fraud_agent(state: BankChatState) -> BankChatState:
+    """
+    Smart Fraud Agent node for LangGraph.
+    Decides between technical analysis and expert advice.
+    """
+    last_msg = ""
+    for msg in reversed(state["messages"]):
+        if msg.__class__.__name__ == "HumanMessage":
+            last_msg = msg.content
+            break
+    
+    decision_prompt = (
+        "You are a fraud detection reasoning engine. "
+        "Based on the user's message, decide if we need to call a technical tool (ANALYZE) "
+        "to check an IBAN/transaction, or if we should just respond as an expert (TALK).\n\n"
+        f"Message: {last_msg}\n\n"
+        "Rules:\n"
+        "- ANALYZE: If there is an IBAN, a specific transaction to check, or a request for deep scan.\n"
+        "- TALK: If it's a general question, a request for advice, or an explanation of concepts.\n\n"
+        "Your answer must be in this format:\n"
+        "REASONING: <brief explanation>\n"
+        "DECISION: <ANALYZE or TALK>"
+    )
+
+    try:
+        decision_resp = llm.invoke(decision_prompt).content
+        lines = decision_resp.strip().split("\n")
+        reasoning = "Analyse de la requête..."
+        decision  = "TALK"
+        for line in lines:
+            if line.upper().startswith("REASONING:"):
+                reasoning = line.split(":", 1)[1].strip()
+            if line.upper().startswith("DECISION:"):
+                decision = "ANALYZE" if "ANALYZE" in line.upper() else "TALK"
+
+        prefix = f"💡 *{reasoning}*\n\n---\n\n"
+
+        if decision == "ANALYZE":
+            iban = extract_iban(state["messages"])
+            response = httpx.post(
+                f"{FRAUD_SERVICE_URL}/analyze",
+                json={
+                    "message":    last_msg,
+                    "iban":       iban,
+                    "action":     "fraud_check",
+                    "user_id":    state.get("user_id", "anonymous"),
+                    "session_id": state.get("session_id", ""),
+                    "excel_path": "",
+                },
+                timeout=120.0,
+            )
+            response.raise_for_status()
+            result = response.json()
+            ai_response = prefix + (result.get("llm_summary") or result.get("summary") or "Analyse terminée.")
+            return {
+                **state,
+                "messages": [AIMessage(content=ai_response)],
+                "agent":    "fraud_agent",
+                "context":  result
+            }
+        else:
+            # Path : TALK
+            system = SystemMessage(content=SYSTEM_PROMPTS["fraud_agent"])
+            messages_with_system = [system] + list(state["messages"])
+            response = llm.invoke(messages_with_system)
+            return {
+                **state,
+                "messages": [AIMessage(content=prefix + response.content)],
+                "agent":    "fraud_agent",
+            }
+
+    except Exception as e:
+        return {
+            **state,
+            "messages": [AIMessage(content=f"❌ Erreur agent fraude : {str(e)}")],
+            "agent":    "fraud_agent",
+        }
+
 def handle_fallback(state: BankChatState) -> BankChatState:
     return _run_agent(state, "fallback")
 
@@ -194,48 +304,104 @@ def stream_agent_response(intent: str, messages: list):
     Pour les autres agents : streaming LLM natif.
     """
     if intent == "fraud":
-        # Extraire l'IBAN du dernier message utilisateur
-        iban = extract_iban(messages)
-
-        # Récupérer le texte brut du dernier message pour l'envoyer au service
+        # 1. Décision : Analyse technique ou Discussion d'expert ?
         last_msg = ""
         for msg in reversed(messages):
             if msg.__class__.__name__ == "HumanMessage":
                 last_msg = msg.content
                 break
 
-        try:
-            response = httpx.post(
-                f"{FRAUD_SERVICE_URL}/analyze",
-                json={
-                    "message":    last_msg,
-                    "iban":       iban,
-                    "action":     "fraud_check",
-                    "user_id":    "anonymous",
-                    "session_id": "",
-                    "excel_path": "",
-                },
-                timeout=120.0,
-            )
-            response.raise_for_status()
-            result  = response.json()
-            summary = result.get("llm_summary", result.get("summary", "Analyse de fraude terminée."))
-        except httpx.TimeoutException:
-            summary = "⏱️ Le service de fraude a mis trop de temps à répondre. Réessayez."
-        except Exception as e:
-            summary = f"❌ Erreur service de fraude : {str(e)}"
+        decision_prompt = (
+            "You are a fraud detection reasoning engine. "
+            "Based on the user's message, decide if we need to call a technical tool (ANALYZE) "
+            "to check an IBAN/transaction, or if we should just respond as an expert (TALK).\n\n"
+            f"Message: {last_msg}\n\n"
+            "Rules:\n"
+            "- ANALYZE: If there is an IBAN, a specific transaction to check, or a request for deep scan.\n"
+            "- TALK: If it's a general question, a request for advice, or an explanation of concepts.\n\n"
+            "Your answer must be in this format:\n"
+            "REASONING: <brief explanation in French>\n"
+            "DECISION: <ANALYZE or TALK>"
+        )
 
-        yield summary, "fraud_agent"
+        try:
+            decision_resp = llm.invoke(decision_prompt).content
+            lines = decision_resp.strip().split("\n")
+            reasoning = "Analyse de la requête..."
+            decision  = "TALK"
+            
+            for line in lines:
+                if line.upper().startswith("REASONING:"):
+                    reasoning = line.split(":", 1)[1].strip()
+                if line.upper().startswith("DECISION:"):
+                    decision = "ANALYZE" if "ANALYZE" in line.upper() else "TALK"
+
+            yield f"💡 *{reasoning}*\n\n---\n\n", "fraud_agent"
+
+            if decision == "ANALYZE":
+                iban = extract_iban(messages)
+                response = httpx.post(
+                    f"{FRAUD_SERVICE_URL}/analyze",
+                    json={
+                        "message":    last_msg,
+                        "iban":       iban,
+                        "action":     "fraud_check",
+                        "user_id":    "anonymous",
+                        "session_id": "",
+                        "excel_path": "",
+                    },
+                    timeout=120.0,
+                )
+                response.raise_for_status()
+                result  = response.json()
+                summary = result.get("llm_summary", result.get("summary", "Analyse de fraude terminée."))
+                yield summary, "fraud_agent"
+            else:
+                # Path : TALK (Expert advice)
+                system = SystemMessage(content=SYSTEM_PROMPTS["fraud_agent"])
+                messages_with_system = [system] + list(messages)
+                for chunk in llm.stream(messages_with_system):
+                    token = chunk.content
+                    if token:
+                        yield token, "fraud_agent"
+
+        except Exception as e:
+            yield f"❌ Erreur lors de la décision : {str(e)}", "fraud_agent"
         return
 
     # Agents classiques — streaming token par token
-    agent_key = {
-        "account":  "account_agent",
-        "transfer": "transfer_agent",
-        "support":  "support_agent",
-    }.get(intent, "fallback")
+    agent_key_map = {
+        "account":     "account_agent",
+        "transfer":    "transfer_agent",
+        "support":     "support_agent",
+        "text_to_sql": "text_to_sql_agent",
+        "sql":         "text_to_sql_agent",
+    }
+    
+    agent_key = agent_key_map.get(intent, "fallback")
 
-    system = SystemMessage(content=SYSTEM_PROMPTS[agent_key])
+    # Si c'est le text_to_sql_agent, on fait l'appel HTTP (pas de stream token par token nativement ici)
+    if agent_key == "text_to_sql_agent":
+        last_user_msg = ""
+        for msg in reversed(messages):
+            if msg.__class__.__name__ == "HumanMessage":
+                last_user_msg = msg.content
+                break
+        
+        try:
+            response = httpx.post(
+                f"{os.getenv('TEXT2SQL_SERVICE_URL', 'http://text-to-sql-service:8002')}/query",
+                json={"question": last_user_msg, "user_id": "anonymous"},
+                timeout=60.0,
+            )
+            response.raise_for_status()
+            result = response.json()
+            yield result.get("explanation", "Query executed."), "text2sql_agent"
+        except Exception as e:
+            yield f"❌ Erreur service SQL : {str(e)}", "text2sql_agent"
+        return
+
+    system = SystemMessage(content=SYSTEM_PROMPTS.get(agent_key, SYSTEM_PROMPTS["fallback"]))
     messages_with_system = [system] + list(messages)
 
     for chunk in llm.stream(messages_with_system):
