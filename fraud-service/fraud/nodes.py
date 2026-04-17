@@ -1,207 +1,221 @@
 """
-LangGraph node functions for the Fraud Detection Agent.
-Self-contained — does NOT import from parent packages.
+nodes.py — Nœuds du graphe LangGraph pour la détection de fraude.
+
+Modification principale :
+  - analyze_fraud() ouvre une session DB et appelle rule_engine.run_rules_from_db()
+    au lieu de rules.run_all_rules() (qui était statique).
+  - Les règles actives sont lues depuis la table fraud_rules à chaque analyse.
+  - Ajouter, modifier ou désactiver une règle en DB est immédiatement pris en compte.
 """
 
+from __future__ import annotations
+
+import logging
 import os
 import re
-import urllib.parse
-import pandas as pd
+from typing import Any
+
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_groq import ChatGroq
-from langchain_ollama import ChatOllama
-from typing import Dict
 
-from .state import FraudAgentState
-from .loader import load_transactions, filter_by_iban, get_account_summary
-from .rules import run_all_rules
-from .scoring import (
-    compute_behavioral_score,
+from .database        import SessionLocal
+from .loader          import filter_by_iban, find_transaction_file, get_account_summary, load_transactions
+from .output_reports  import route_fraud_output
+from .rule_engine     import run_rules_from_db          # ← dynamique (DB)
+from .scoring         import (
     compute_aml_score,
+    compute_behavioral_score,
     compute_final_score,
     check_tracfin_required,
 )
-from .report import generate_transaction_export
-from .output_reports import route_fraud_output
+from .state import FraudAgentState
 
-# ── LLM autonome ─────────────────────────────────────────────────────────────
+logger = logging.getLogger(__name__)
 
-def get_llm():
-    provider = os.getenv("LLM_PROVIDER", "groq").lower()
-    if provider == "ollama":
-        base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-        model    = os.getenv("OLLAMA_MODEL", "llama3.2")
-        print(f"✅ [fraud-service] Ollama: {model} @ {base_url}")
-        return ChatOllama(base_url=base_url, model=model, temperature=0.7)
-    else:
-        api_key = os.getenv("GROQ_API_KEY", "")
-        model   = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
-        if not api_key:
-            raise ValueError("GROQ_API_KEY manquant dans .env")
-        print(f"✅ [fraud-service] Groq: {model}")
-        return ChatGroq(model=model, api_key=api_key, temperature=0.7)
+# ── LLM ──────────────────────────────────────────────────────────────────────
+_llm: Any = None
 
-
-_llm = None
 
 def _get_llm():
     global _llm
     if _llm is None:
-        _llm = get_llm()
+        _llm = ChatGroq(
+            model=os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile"),
+            temperature=0.1,
+            groq_api_key=os.getenv("GROQ_API_KEY", ""),
+        )
     return _llm
 
 
-# ── IBAN regex ────────────────────────────────────────────────────────────────
+# ── Helpers ───────────────────────────────────────────────────────────────────
 
 IBAN_PATTERN = re.compile(
     r"\b([A-Z]{2}\d{2}[\s]?[\dA-Z]{4}[\s]?[\dA-Z]{4}[\s]?[\dA-Z]{4}[\s]?[\dA-Z]{0,16})\b"
-    r"|"
-    r"\b(IBAN_[A-Z]{2}\d+)\b",
+    r"|\b(IBAN_[A-Z]{2}\d+)\b",
     re.IGNORECASE,
 )
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# Node 1: PARSE REQUEST
-# ═══════════════════════════════════════════════════════════════════════════════
+def _extract_iban(text: str) -> str:
+    match = IBAN_PATTERN.search(text or "")
+    if match:
+        return (match.group(1) or match.group(2) or "").replace(" ", "").upper()
+    return ""
 
-def parse_request(state: FraudAgentState) -> Dict:
-    last_message = ""
-    for msg in reversed(state["messages"]):
-        if isinstance(msg, HumanMessage):
-            last_message = msg.content
-            break
 
-    # Extraire IBAN
-    iban = ""
-    iban_match = IBAN_PATTERN.search(last_message)
-    if iban_match:
-        iban = (iban_match.group(1) or iban_match.group(2) or "").replace(" ", "").upper()
+# ══════════════════════════════════════════════════════════════════════════════
+# Nœud 1 — parse_request
+# ══════════════════════════════════════════════════════════════════════════════
 
-    # Détecter l'action
-    text_lower = last_message.lower()
+def parse_request(state: FraudAgentState) -> dict:
+    """Extrait l'IBAN et l'action depuis le dernier message utilisateur."""
+    last_msg = state["messages"][-1] if state["messages"] else None
+    text = last_msg.content if last_msg else ""
+
+    iban = _extract_iban(text)
+
     action = "fraud_check"
-    if any(kw in text_lower for kw in ["export", "excel", "téléchar", "download",
-                                        "relevé", "statement", "historique", "history",
-                                        "toutes les transactions", "all transactions"]):
+    text_lower = text.lower()
+    if any(w in text_lower for w in ("export", "télécharge", "download", "exporter")):
         action = "export_transactions"
-    if any(kw in text_lower for kw in ["fraude", "fraud", "suspect", "anomal",
-                                        "vérif", "check", "analys", "détect",
-                                        "detect", "risque", "risk", "aml", "blanchiment"]):
-        action = "fraud_check"
+
+    logger.info(f"[parse_request] IBAN={iban!r}  action={action!r}")
 
     if not iban:
-        error_msg = (
-            "J'aurai besoin de l'IBAN du compte pour pouvoir répondre à votre demande.\n\n"
-            "Veuillez fournir un IBAN valide, par exemple :\n"
-            "- `IBAN_FR123`\n"
-            "- `FR7612345678901234567890123`"
-        )
         return {
-            "iban":    "",
-            "action":  action,
-            "error":   "IBAN non détecté.",
-            "llm_summary": error_msg,
-            "messages": [AIMessage(content=error_msg)],
+            "iban":   "",
+            "action": action,
+            "error":  "Aucun IBAN trouvé dans le message. Veuillez fournir un IBAN valide.",
         }
 
-    print(f"[fraud] IBAN extrait: {iban}, action: {action}")
     return {"iban": iban, "action": action, "error": None}
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# Node 2: LOAD DATA
-# ═══════════════════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════════════════
+# Nœud 2 — load_data
+# ══════════════════════════════════════════════════════════════════════════════
 
-def load_data(state: FraudAgentState) -> Dict:
+def load_data(state: FraudAgentState) -> dict:
+    """Charge et filtre les transactions pour l'IBAN extrait."""
     if state.get("error"):
         return {}
 
     iban       = state["iban"]
-    excel_path = state.get("excel_path") or ""
+    excel_path = state.get("excel_path", "")
 
     try:
-        full_df     = load_transactions(excel_path or None)
-        filtered_df = filter_by_iban(full_df, iban)
+        df_all = load_transactions(excel_path or None)
+        df     = filter_by_iban(df_all, iban)
 
-        if filtered_df.empty:
-            # Lister les IBANs disponibles pour aider au debug
-            available = full_df.iloc[:, 0].unique()[:5].tolist() if not full_df.empty else []
-            error_msg = (
-                f"❌ Aucune transaction trouvée pour l'IBAN **{iban}**.\n\n"
-                f"IBANs disponibles dans le fichier (exemples) : {available}\n\n"
-                "Vérifiez que l'IBAN est correct."
-            )
+        if df.empty:
             return {
                 "transactions_raw":   [],
                 "transactions_count": 0,
                 "account_summary":    None,
-                "error":              f"Aucune transaction pour {iban}",
-                "llm_summary":        error_msg,
-                "messages":           [AIMessage(content=error_msg)],
+                "error": f"Aucune transaction trouvée pour l'IBAN {iban}.",
             }
 
-        summary = get_account_summary(filtered_df)
-        print(f"[fraud] {len(filtered_df)} transactions chargées pour {iban}")
+        summary = get_account_summary(df)
+        rows    = df.to_dict("records")
 
+        logger.info(f"[load_data] {len(rows)} transactions pour {iban}")
         return {
-            "transactions_raw":   filtered_df.to_dict("records"),
-            "transactions_count": len(filtered_df),
+            "transactions_raw":   rows,
+            "transactions_count": len(rows),
             "account_summary":    summary,
             "error":              None,
         }
 
-    except FileNotFoundError as e:
-        error_msg = f"❌ Fichier de transactions introuvable : {str(e)}\n\nVérifiez que `/app/data/transactions.csv` existe."
-        return {
-            "transactions_raw":   [],
-            "transactions_count": 0,
-            "error":              str(e),
-            "llm_summary":        error_msg,
-            "messages":           [AIMessage(content=error_msg)],
-        }
-    except Exception as e:
-        error_msg = f"❌ Erreur chargement données : {str(e)}"
-        return {
-            "transactions_raw":   [],
-            "transactions_count": 0,
-            "error":              str(e),
-            "llm_summary":        error_msg,
-            "messages":           [AIMessage(content=error_msg)],
-        }
+    except FileNotFoundError as exc:
+        return {"error": str(exc), "transactions_raw": [], "transactions_count": 0}
+    except Exception as exc:
+        logger.exception("[load_data] Unexpected error")
+        return {"error": f"Erreur chargement données : {exc}",
+                "transactions_raw": [], "transactions_count": 0}
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# Node 3a: ANALYZE FRAUD
-# ═══════════════════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════════════════
+# Routeur conditionnel
+# ══════════════════════════════════════════════════════════════════════════════
 
-def analyze_fraud(state: FraudAgentState) -> Dict:
-    if state.get("error") or not state.get("transactions_raw"):
+def route_fraud_action(state: FraudAgentState) -> str:
+    if state.get("error"):
+        return "generate_summary"
+    if state.get("action") == "export_transactions":
+        return "export_transactions"
+    return "analyze_fraud"
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Nœud 3a — analyze_fraud  ← MODIFIÉ : lecture des règles depuis DB
+# ══════════════════════════════════════════════════════════════════════════════
+
+def analyze_fraud(state: FraudAgentState) -> dict:
+    """
+    Analyse de fraude dynamique :
+      1. Ouvre une session DB
+      2. Charge les règles ACTIVES depuis fraud_rules
+      3. Évalue chaque règle sur le DataFrame de transactions
+      4. Calcule les scores comportemental, AML et final
+      5. Génère le rapport Excel
+    """
+    if state.get("error"):
         return {}
 
-    df = pd.DataFrame(state["transactions_raw"])
-    if "timestamp" in df.columns:
-        df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
+    import pandas as pd
+    df = pd.DataFrame(state.get("transactions_raw", []))
 
-    rule_results                         = run_all_rules(df)
-    score_behavioral, behavioral_signals = compute_behavioral_score(df)
-    score_aml                            = compute_aml_score(rule_results)
-    score_final, risk_level              = compute_final_score(score_behavioral, score_aml)
-    tracfin                              = check_tracfin_required(rule_results, df)
+    if df.empty:
+        return {
+            "fraud_results":    [],
+            "score_behavioral": 0,
+            "score_aml":        0,
+            "score_final":      0,
+            "risk_level":       "APPROVED",
+            "tracfin_required": False,
+            "error":            "Aucune donnée à analyser.",
+        }
 
-    output = route_fraud_output(
-    df=df,
-    iban=state["iban"],
-    rule_results=rule_results,
-    behavioral_signals=behavioral_signals,
-    score_behavioral=score_behavioral,
-    score_aml=score_aml,
-    score_final=score_final,
-    risk_level=risk_level,
-    tracfin_required=tracfin,
+    # ── Ouvrir la session DB pour lire les règles ─────────────────────────
+    db = SessionLocal()
+    try:
+        # ── Évaluation des règles (dynamique depuis DB) ───────────────────
+        rule_results = run_rules_from_db(df, db)
+        logger.info(f"[analyze_fraud] {len(rule_results)} règles évaluées, "
+                    f"{sum(1 for r in rule_results if r['triggered'])} déclenchées")
+
+        # ── Score comportemental (domaines BEHAVIORAL/VELOCITY/GEO/LIMIT) ─
+        score_behavioral, behavioral_signals = compute_behavioral_score(df, db=db)
+
+    finally:
+        db.close()
+
+    # ── Score AML (toutes règles déclenchées) ─────────────────────────────
+    score_aml = compute_aml_score(rule_results)
+
+    # ── Score final ───────────────────────────────────────────────────────
+    score_final, risk_level = compute_final_score(score_behavioral, score_aml)
+
+    # ── TRACFIN ───────────────────────────────────────────────────────────
+    tracfin = check_tracfin_required(rule_results, df)
+
+    logger.info(f"[analyze_fraud] Score comportemental={score_behavioral} "
+                f"AML={score_aml} Final={score_final} Niveau={risk_level} "
+                f"TRACFIN={tracfin}")
+
+    # ── Rapport Excel ─────────────────────────────────────────────────────
+    iban        = state["iban"]
+    output_data = route_fraud_output(
+        df=df,
+        iban=iban,
+        rule_results=rule_results,
+        behavioral_signals=behavioral_signals,
+        score_behavioral=score_behavioral,
+        score_aml=score_aml,
+        score_final=score_final,
+        risk_level=risk_level,
+        tracfin_required=tracfin,
     )
-
-    print(f"[fraud] Analyse terminée — score={score_final}, risk={risk_level}")
 
     return {
         "fraud_results":    rule_results,
@@ -210,132 +224,102 @@ def analyze_fraud(state: FraudAgentState) -> Dict:
         "score_final":      score_final,
         "risk_level":       risk_level,
         "tracfin_required": tracfin,
-        "report_path":      output["local_path"],
-        "download_url":     output.get("download_url", ""),
-        "sheet_url":        output["sheet_url"],
-        "drive_url":        output["drive_url"],
-        "output_errors":    output["errors"],
+        "report_path":      output_data.get("local_path"),
+        "download_url":     output_data.get("download_url"),
+        "sheet_url":        output_data.get("sheet_url"),
+        "drive_url":        output_data.get("drive_url"),
+        "output_errors":    output_data.get("errors", []),
         "error":            None,
     }
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# Node 3b: EXPORT TRANSACTIONS
-# ═══════════════════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════════════════
+# Nœud 3b — export_transactions
+# ══════════════════════════════════════════════════════════════════════════════
 
-def export_transactions(state: FraudAgentState) -> Dict:
-    if state.get("error") or not state.get("transactions_raw"):
+def export_transactions(state: FraudAgentState) -> dict:
+    """Exporte toutes les transactions de l'IBAN en Excel sans analyse."""
+    if state.get("error"):
         return {}
 
-    df = pd.DataFrame(state["transactions_raw"])
-    if "timestamp" in df.columns:
-        df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
+    import pandas as pd
+    from .report import generate_transaction_export
 
-    report_path = generate_transaction_export(df, state["iban"])
-    return {"report_path": report_path, "error": None}
+    df   = pd.DataFrame(state.get("transactions_raw", []))
+    iban = state["iban"]
+
+    if df.empty:
+        return {"error": "Aucune transaction à exporter."}
+
+    try:
+        report_path = generate_transaction_export(df, iban)
+        return {"report_path": report_path, "error": None}
+    except Exception as exc:
+        logger.exception("[export_transactions] Error")
+        return {"error": f"Erreur export : {exc}"}
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# Node 4: GENERATE LLM SUMMARY
-# ═══════════════════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════════════════
+# Nœud 4 — generate_summary
+# ══════════════════════════════════════════════════════════════════════════════
 
-def generate_summary(state: FraudAgentState) -> Dict:
-    # ── Cas erreur : retourner le message d'erreur déjà construit ──────────
-    if state.get("error"):
-        # llm_summary a déjà été rempli par load_data ou parse_request
-        existing = state.get("llm_summary", "")
-        if existing:
-            return {"llm_summary": existing, "messages": [AIMessage(content=existing)]}
-        # Fallback si vraiment rien
-        msg = f"❌ Erreur : {state['error']}"
-        return {"llm_summary": msg, "messages": [AIMessage(content=msg)]}
+def generate_summary(state: FraudAgentState) -> dict:
+    """Génère un résumé LLM en français de l'analyse de fraude."""
 
-    action = state.get("action", "fraud_check")
+    error = state.get("error")
+    if error:
+        return {"llm_summary": f"❌ Analyse impossible : {error}"}
 
-    # ── Export terminé ────────────────────────────────────────────────────
-    if action == "export_transactions":
-        report_path = state.get('report_path')
-        if report_path:
-            safe_path = urllib.parse.quote(str(report_path))
-            download_link = f"<u><a href='http://localhost:8001/download?file={safe_path}' target='_blank'>Télécharger l'export</a></u>"
-        else:
-            download_link = "`N/A`"
+    iban          = state.get("iban", "")
+    score_final   = state.get("score_final", 0)
+    risk_level    = state.get("risk_level", "UNKNOWN")
+    tracfin       = state.get("tracfin_required", False)
+    fraud_results = state.get("fraud_results", [])
+    account_sum   = state.get("account_summary") or {}
+    download_url  = state.get("download_url", "")
 
-        summary_text = (
-            f"✅ **Export terminé**\n\n"
-            f"📊 **IBAN:** `{state['iban']}`\n"
-            f"📝 **Transactions:** {state.get('transactions_count', 0)}\n"
-            f"📁 **Fichier:** {download_link}\n\n"
-            "Le fichier Excel contient toutes les transactions du compte."
-        )
-        return {"llm_summary": summary_text, "messages": [AIMessage(content=summary_text)]}
-
-    # ── Résumé LLM fraud ──────────────────────────────────────────────────
-    risk_emoji = {
-        "APPROVED": "🟢", "REVIEW": "🟡", "BLOCK": "🔴"
-    }.get(state.get("risk_level", ""), "⚪")
-
-    triggered_rules = [r for r in state.get("fraud_results", []) if r.get("triggered")]
+    triggered_rules = [r for r in fraud_results if r.get("triggered")]
     rules_text = "\n".join(
-        f"  - [{r['severity']}] {r['rule']}: {r['details']} (+{r.get('points', 0)} pts)"
+        f"  • [{r.get('domain','?')}] {r.get('rule_name', r.get('rule','?'))} "
+        f"(+{r.get('points',0)} pts) : {r.get('details','')}"
         for r in triggered_rules
-    ) if triggered_rules else "  Aucune règle déclenchée."
+    ) or "  Aucune règle déclenchée."
 
-    info = state.get("account_summary", {}) or {}
+    risk_emoji = {"APPROVED": "🟢", "REVIEW": "🟡", "HOLD": "🟠", "BLOCK": "🔴"}.get(risk_level, "⚪")
 
-    prompt = (
-        "Tu es un analyste fraude bancaire expert. "
-        "Génère un rapport concis et professionnel en français.\n\n"
-        f"IBAN: {state['iban']}\n"
-        f"Transactions: {state.get('transactions_count', 0)}\n"
-        f"Montant total: {info.get('total_amount', 0)}\n"
-        f"Période: {info.get('date_range', 'N/A')}\n"
-        f"Types de transaction: {info.get('transaction_types', {})}\n\n"
-        f"Score comportemental: {state.get('score_behavioral', 0)}/100\n"
-        f"Score AML (règles): {state.get('score_aml', 0)}/100\n"
-        f"Score final: {state.get('score_final', 0)}/100\n"
-        f"Niveau de risque: {state.get('risk_level', 'N/A')} {risk_emoji}\n"
-        f"  (Seuils: <30 APPROVED · 30–59 REVIEW · ≥60 BLOCK)\n"
-        f"TRACFIN: {'OUI' if state.get('tracfin_required') else 'NON'}\n\n"
-        f"Règles déclenchées:\n{rules_text}\n\n"
-        "Génère un résumé avec : 1. Verdict global  2. Alertes  3. Recommandations"
-    )
+    prompt = f"""Tu es un expert en détection de fraude bancaire. Génère un résumé concis et professionnel en français de l'analyse suivante.
+
+IBAN analysé : {iban}
+Transactions : {account_sum.get('total_transactions', 0)} | Montant total : {account_sum.get('total_amount', 0):,.2f} TND
+Score final  : {score_final}/100
+Niveau risque: {risk_emoji} {risk_level}
+TRACFIN      : {"OUI ⚠️" if tracfin else "NON"}
+
+Règles déclenchées :
+{rules_text}
+
+{"Rapport Excel : " + download_url if download_url else ""}
+
+Instructions :
+- 3 à 5 phrases maximum
+- Cite les règles déclenchées les plus importantes
+- Recommande une action concrète (bloquer, réviser, approuver)
+- Mentionne TRACFIN si requis
+- Ton professionnel et factuel"""
 
     try:
         llm      = _get_llm()
-        response = llm.invoke(prompt)
-        llm_text = response.content
-    except Exception as e:
-        llm_text = f"(Résumé LLM indisponible: {e})"
+        response = llm.invoke([HumanMessage(content=prompt)])
+        summary  = response.content.strip()
+    except Exception as exc:
+        logger.warning(f"[generate_summary] LLM failed: {exc}")
+        summary = (
+            f"{risk_emoji} **Analyse IBAN {iban}** — Score : {score_final}/100 ({risk_level})\n"
+            f"Règles déclenchées : {len(triggered_rules)}\n"
+            f"TRACFIN : {'OUI ⚠️' if tracfin else 'NON'}"
+        )
 
-    report_path = state.get('report_path')
-    if report_path:
-        safe_path = urllib.parse.quote(str(report_path))
-        download_link = f"<u><a href='http://localhost:8001/download?file={safe_path}' target='_blank'>Télécharger le rapport</a></u>"
-    else:
-        download_link = "`N/A`"
+    if download_url:
+        summary += f"\n\n📥 [Télécharger le rapport Excel]({download_url})"
 
-    header = (
-        f"# 🏦 Rapport d'Analyse de Fraude\n\n"
-        f"**IBAN:** `{state['iban']}`\n"
-        f"**Transactions:** {state.get('transactions_count', 0)}\n"
-        f"**Score final:** {state.get('score_final', 0)}/100 {risk_emoji} "
-        f"**{state.get('risk_level', '')}**\n"
-        f"**TRACFIN:** {'⚠️ DÉCLARATION REQUISE' if state.get('tracfin_required') else '✅ Non requis'}\n"
-        f"**📥 Rapport Excel:** {state.get('download_url') or state.get('report_path', 'N/A')}\n\n"
-        f"---\n\n{llm_text}"
-    )
-
-    return {"llm_summary": header, "messages": [AIMessage(content=header)]}
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# ROUTING
-# ═══════════════════════════════════════════════════════════════════════════════
-
-def route_fraud_action(state: FraudAgentState) -> str:
-    if state.get("error"):
-        return "generate_summary"
-    if state.get("action") == "export_transactions":
-        return "export_transactions"
-    return "analyze_fraud"
+    return {"llm_summary": summary}

@@ -1,0 +1,14 @@
+<!-- ═══════════════════════════════════════════════════════════════════════
+     ADD THIS SNIPPET inside your existing sidebar, after the conv-list div
+     and before the .sidebar-profile div, in chat.component.html
+     ═══════════════════════════════════════════════════════════════════════ -->
+
+<div class="sidebar-admin-link">
+  <a routerLink="/admin/fraud-rules" class="admin-nav-link" routerLinkActive="admin-nav-link--active">
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+      <path d="M8 1L2 4v4c0 3.66 2.56 7.08 6 7.93C11.44 15.08 14 11.66 14 8V4L8 1z"/>
+    </svg>
+    <span>Fraud rule admin</span>
+    <span class="admin-badge">Admin</span>
+  </a>
+</div>

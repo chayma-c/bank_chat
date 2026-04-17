@@ -5,10 +5,10 @@ KEYCLOAK_CLIENT_ID = env('KEYCLOAK_CLIENT_ID', default='bank_chat')
 
 # REST Framework settings
 REST_FRAMEWORK = {
-    'DEFAULT_AUTHENTICATION_CLASSES': [
-        'path.to.authentication.KeycloakJWTAuthentication',
+    "DEFAULT_AUTHENTICATION_CLASSES": [
+        "chatbot.auth.authentication.KeycloakAuthentication",
     ],
-    'DEFAULT_PERMISSION_CLASSES': [
-        'rest_framework.permissions.AllowAny',
+    "DEFAULT_PERMISSION_CLASSES": [
+        "rest_framework.permissions.IsAuthenticated",
     ],
 }

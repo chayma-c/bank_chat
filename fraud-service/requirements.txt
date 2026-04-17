@@ -16,6 +16,7 @@ psycopg2-binary
 google-api-python-client>=2.100.0
 google-auth-httplib2>=0.1.1
 google-auth-oauthlib>=1.1.0
+sqlalchemy>=2.0
 celery
 redis
 django-celery-beat

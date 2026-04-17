@@ -835,3 +835,154 @@
   background: #7f1d1d;
   color: #fca5a5;
 }
+
+/* ═══════════════════════════════════════════════════════════════════
+   ADD to chat.component.css — admin navigation link in sidebar
+   ═══════════════════════════════════════════════════════════════════ */
+
+/* Wrapper */
+.sidebar-admin-link {
+  padding: 0 0.75rem 0.5rem;
+  border-top: 1px solid #1f2937;
+  margin-top: 0.5rem;
+  padding-top: 0.75rem;
+}
+
+/* Link */
+.admin-nav-link {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.6rem;
+  border-radius: 8px;
+  font-size: 0.8rem;
+  color: #9ca3af;
+  text-decoration: none;
+  transition: background 0.15s, color 0.15s;
+  cursor: pointer;
+}
+.admin-nav-link:hover {
+  background: #1f2937;
+  color: #f9fafb;
+}
+.admin-nav-link--active {
+  background: #1e3a8a;
+  color: #93c5fd;
+}
+
+/* Badge */
+.admin-badge {
+  margin-left: auto;
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  background: #2563eb;
+  color: #fff;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+/* ─── Add these rules to fraud-admin.component.css ──────────────────────── */
+
+/* ── Error banner ─────────────────────────────────────────────────────── */
+.error-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 24px 12px;
+  padding: 10px 14px;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 8px;
+  font-size: 13px;
+  color: #b91c1c;
+}
+.error-banner svg { flex-shrink: 0; }
+.error-banner span { flex: 1; }
+
+.btn-retry {
+  background: none;
+  border: 1px solid #fca5a5;
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #b91c1c;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.btn-retry:hover { background: #fee2e2; }
+
+/* ── Loading skeleton ─────────────────────────────────────────────────── */
+.skeleton-rows {
+  padding: 8px 0;
+}
+
+.skeleton-row {
+  display: grid;
+  grid-template-columns: 26% 13% 23% 16% 11% 11%;
+  align-items: center;
+  padding: 14px 14px;
+  border-bottom: 1px solid #f9fafb;
+  gap: 14px;
+}
+
+.skel {
+  background: linear-gradient(90deg, #f3f4f6 25%, #e9eaeb 50%, #f3f4f6 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.4s infinite;
+  border-radius: 4px;
+  height: 12px;
+}
+
+@keyframes shimmer {
+  0%   { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+.skel--name    { width: 70%; height: 14px; }
+.skel--badge   { width: 60px; height: 20px; border-radius: 4px; }
+.skel--text    { width: 80%; }
+.skel--bar     { width: 90px; height: 8px; border-radius: 4px; }
+.skel--toggle  { width: 34px; height: 18px; border-radius: 9px; }
+.skel--actions { width: 80px; height: 28px; border-radius: 6px; }
+.skel--metric  { width: 60px; height: 24px; border-radius: 4px; }
+
+/* ── Loading footer text ──────────────────────────────────────────────── */
+.loading-text {
+  font-size: 12px;
+  color: #9ca3af;
+  font-style: italic;
+}
+/* ── À ajouter à la fin de chat.component.css ───────────────────────────── */
+
+/* Bouton admin dans le menu profile */
+.profile-menu-item--admin {
+  color: #93c5fd;
+}
+.profile-menu-item--admin:hover {
+  background: #1e3a8a;
+  color: #bfdbfe;
+}
+
+/* Badge "Admin" dans le menu */
+.profile-admin-badge {
+  margin-left: auto;
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  background: #2563eb;
+  color: #fff;
+  padding: 2px 6px;
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+
+/* Séparateur entre admin et logout */
+.profile-menu-divider {
+  height: 1px;
+  background: #374151;
+  margin: 3px 6px;
+}
