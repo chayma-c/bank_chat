@@ -1,6 +1,8 @@
 """
 DRF authentication backend that validates Keycloak-issued JWT tokens.
 """
+from urllib import request
+
 import jwt
 from django.conf import settings
 from django.contrib.auth.models import User
@@ -19,6 +21,8 @@ class KeycloakAuthentication(BaseAuthentication):
         return 'Bearer realm="api"'
 
     def authenticate(self, request):
+        print("===== AUTH CALLED =====")
+        print("Authorization header:", request.headers.get("Authorization"))    
         header = request.headers.get("Authorization", "")
         print(f"🔐 Auth header present: {bool(header)}")
         print(f"🔐 Auth header starts with Bearer: {header.startswith('Bearer ')}")
@@ -47,6 +51,7 @@ class KeycloakAuthentication(BaseAuthentication):
                 public_key,
                 algorithms=["RS256"],
                 audience=settings.KEYCLOAK_CLIENT_ID,
+                issuer=f"{settings.KEYCLOAK_ISSUER}/realms/{settings.KEYCLOAK_REALM}",
                 options={"verify_exp": True},
             )
             print(f"🔐 ✅ Token valid! User: {payload.get('preferred_username')}")
@@ -66,6 +71,8 @@ class KeycloakAuthentication(BaseAuthentication):
         # (which do isinstance(request.user, dict)) work correctly.
         self._get_or_create_django_user(payload)
         user_dict = self._build_user_dict(payload)
+        print("AUTH HEADER:", request.headers.get("Authorization"))
+
         return (user_dict, payload)
 
     @staticmethod

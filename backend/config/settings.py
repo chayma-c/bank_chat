@@ -190,6 +190,8 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 KEYCLOAK_URL       = os.getenv('KEYCLOAK_URL',       'http://localhost:8080/auth')
 KEYCLOAK_REALM     = os.getenv('KEYCLOAK_REALM',     'myrealm')
 KEYCLOAK_CLIENT_ID = os.getenv('KEYCLOAK_CLIENT_ID', 'bank_chat')
+KEYCLOAK_ISSUER = os.getenv('KEYCLOAK_ISSUER', 'http://localhost/auth')
+
 
 # Admin credentials used by the backend to call the Keycloak Admin REST API.
 # These are NEVER exposed to clients — only used server-side by get_admin_token().

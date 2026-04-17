@@ -163,6 +163,8 @@ services:
       KEYCLOAK_URL: http://keycloak:8080/auth
       DJANGO_SETTINGS_MODULE: config.settings
       DEBUG: "True"
+      KEYCLOAK_ISSUER: "http://localhost/auth"   # ← ADD — matches KC_HOSTNAME_URL
+
     ports:
       - "8000:8000"
     depends_on:
