@@ -21,6 +21,10 @@ from fraud.crud         import seed_default_rules
 from fraud.rule_router import router as rule_router
 from fraud.graph        import run_fraud_agent
 
+import asyncio
+from fraud.db import init_db, get_settings, update_settings
+from fraud.scheduler import scheduler_loop, run_global_analysis_task
+
 logger = logging.getLogger(__name__)
 
 
@@ -41,6 +45,13 @@ async def lifespan(app: FastAPI):
             db.close()
     except Exception as e:
         logger.error(f"Could not seed default rules: {e}")
+
+    try:
+        init_db()
+        asyncio.create_task(scheduler_loop())
+        logger.info("Fraud scheduler loop started.")
+    except Exception as e:
+        logger.error(f"Could not start scheduler: {e}")
 
     yield
     logger.info("Fraud service shutting down.")
@@ -63,6 +74,42 @@ app.add_middleware(
 
 # nginx strips /fraud/ prefix → FastAPI receives /rules/...
 app.include_router(rule_router)
+
+# ── Settings & Manual Trigger ───────────────────────────────────────────────
+
+class SettingsUpdate(BaseModel):
+    frequency: str
+    time: str
+    dayOfWeek: int
+
+@app.get("/settings")
+async def get_fraud_settings():
+    s = get_settings()
+    if not s:
+        return {"frequency": "manual", "time": "02:00", "dayOfWeek": 1}
+    # Mapping UI fields (time, dayOfWeek) to DB fields (scheduled_time, day_of_week)
+    return {
+        "frequency": s.get("frequency", "manual"),
+        "time":      s.get("scheduled_time", "02:00"),
+        "dayOfWeek": s.get("day_of_week", 1),
+        "lastRun":   s.get("last_run"),
+        "lastAutoRun": s.get("last_auto_run")
+    }
+
+@app.post("/settings")
+async def save_fraud_settings(data: SettingsUpdate):
+    try:
+        update_settings(data.frequency, data.time, data.dayOfWeek)
+        return {"status": "success", "message": "Settings updated"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/trigger")
+async def trigger_fraud_analysis():
+    # background task
+    asyncio.create_task(run_global_analysis_task())
+    return {"status": "triggered", "message": "Global analysis started in background"}
+
 
 
 def _reports_dir() -> Path:

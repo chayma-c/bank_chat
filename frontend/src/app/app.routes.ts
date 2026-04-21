@@ -41,6 +41,12 @@ export const routes: Routes = [
     ],
   },
   {
+    path: 'fraud-settings',
+    loadComponent: () =>
+      import('./fraud-settings/fraud-settings.component').then(m => m.FraudSettingsComponent),
+    canActivate: [authGuard],
+  },
+  {
     path: '**',
     redirectTo: 'chat',
   },
