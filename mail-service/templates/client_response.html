@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html>
+<body style="font-family: Arial, sans-serif; max-width: 600px; margin: auto; color: #1f2937;">
+  <div style="background: #eff6ff; padding: 20px; border-radius: 8px 8px 0 0; border-bottom: 3px solid #3b82f6;">
+    <h2 style="margin:0; color: #1d4ed8;">BankChat — Votre demande</h2>
+  </div>
+  <div style="padding: 24px; background: #fff; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 8px 8px;">
+    <p>Bonjour <strong>{{ client_name }}</strong>,</p>
+    <p>Suite à votre demande du <strong>{{ date }}</strong>, voici notre réponse :</p>
+    <div style="background: #f9fafb; padding: 16px; border-radius: 6px; border-left: 4px solid #3b82f6; margin: 16px 0;">
+      {{ response_text }}
+    </div>
+    {% if next_steps %}
+    <p><strong>Prochaines étapes :</strong></p>
+    <ul>
+      {% for step in next_steps %}
+      <li>{{ step }}</li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+    <p style="color: #6b7280; font-size: 13px; margin-top: 24px;">
+      Cet email a été généré automatiquement par BankChat.<br>
+      Ne pas répondre directement à cet email.
+    </p>
+  </div>
+</body>
+</html>

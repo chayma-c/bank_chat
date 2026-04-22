@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html>
+<body style="font-family: Arial, sans-serif; max-width: 700px; margin: auto; color: #1f2937;">
+  <div style="background: #1e3a5f; padding: 20px; border-radius: 8px 8px 0 0;">
+    <h2 style="margin:0; color:#fff;">BankChat — Rapport nocturne du {{ date }}</h2>
+  </div>
+  <div style="padding: 24px; background: #fff; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 8px 8px;">
+    <h3>Résumé de la journée</h3>
+    <table style="width:100%; border-collapse:collapse;">
+      <tr style="background:#eff6ff;">
+        <td style="padding:10px; border:1px solid #dbeafe;">Conversations traitées</td>
+        <td style="padding:10px; border:1px solid #dbeafe; font-weight:bold; text-align:right;">{{ total_conversations }}</td>
+      </tr>
+      <tr>
+        <td style="padding:10px; border:1px solid #e5e7eb;">Analyses fraude effectuées</td>
+        <td style="padding:10px; border:1px solid #e5e7eb; font-weight:bold; text-align:right;">{{ fraud_analyses }}</td>
+      </tr>
+      <tr style="background:#fef2f2;">
+        <td style="padding:10px; border:1px solid #fecaca;">Alertes critiques (score ≥ 80)</td>
+        <td style="padding:10px; border:1px solid #fecaca; font-weight:bold; text-align:right; color:#dc2626;">{{ critical_alerts }}</td>
+      </tr>
+      <tr>
+        <td style="padding:10px; border:1px solid #e5e7eb;">TRACFIN requis</td>
+        <td style="padding:10px; border:1px solid #e5e7eb; font-weight:bold; text-align:right; color:#d97706;">{{ tracfin_count }}</td>
+      </tr>
+    </table>
+    {% if top_risk_ibans %}
+    <h3 style="margin-top:24px;">IBANs à risque élevé</h3>
+    <table style="width:100%; border-collapse:collapse;">
+      <tr style="background:#1e3a5f; color:white;">
+        <th style="padding:8px; text-align:left;">IBAN</th>
+        <th style="padding:8px; text-align:right;">Score</th>
+        <th style="padding:8px; text-align:left;">Niveau</th>
+      </tr>
+      {% for item in top_risk_ibans %}
+      {% set row_bg = '#fef2f2' if loop.index % 2 == 0 else '#fff' %}
+      <tr style="background: {{ row_bg }}">
+        <td style="padding:8px; border:1px solid #e5e7eb; font-family:monospace;">{{ item.iban }}</td>
+        <td style="padding:8px; border:1px solid #e5e7eb; text-align:right; font-weight:bold; color:#dc2626;">{{ item.score }}</td>
+        <td style="padding:8px; border:1px solid #e5e7eb;">{{ item.risk_level }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+    {% endif %}
+  </div>
+</body>
+</html>

@@ -1,4 +1,10 @@
-/* ── Layout ───────────────────────────────────────────────────────────── */
+/* ════════════════════════════════════════════════════════════════════
+   fraud-admin.component.css
+   Palette identique au chatbot : #111827 sidebar, #2563eb accent,
+   Inter font, fond #f5f7fa, cartes blanches avec ombre légère.
+   ════════════════════════════════════════════════════════════════════ */
+
+/* ── Layout ──────────────────────────────────────────────────────── */
 .admin-shell {
   display: flex;
   height: 100vh;
@@ -8,21 +14,22 @@
   font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
 }
 
-/* ── Sidebar ──────────────────────────────────────────────────────────── */
+/* ── Sidebar — même dark que le chatbot ──────────────────────────── */
 .admin-sidebar {
-  width: 210px;
-  min-width: 210px;
+  width: 220px;
+  min-width: 220px;
   background: #111827;
   display: flex;
   flex-direction: column;
   flex-shrink: 0;
+  border-right: 1px solid #1f2937;
 }
 
 .sidebar-logo {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 20px 16px 18px;
+  padding: 1.25rem 1rem;
   border-bottom: 1px solid #1f2937;
 }
 
@@ -38,32 +45,33 @@
 }
 
 .logo-title {
-  font-size: 13px;
-  font-weight: 700;
+  font-size: 0.9rem;
+  font-weight: 800;
   color: #f9fafb;
 }
 .logo-sub {
-  font-size: 10px;
+  font-size: 0.65rem;
   color: #6b7280;
   margin-top: 1px;
   text-transform: uppercase;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.07em;
 }
 
 .sidebar-nav {
-  padding: 12px 8px;
+  padding: 10px 8px;
   display: flex;
   flex-direction: column;
   gap: 2px;
+  flex: 1;
 }
 
 .nav-item {
   display: flex;
   align-items: center;
   gap: 9px;
-  padding: 9px 12px;
+  padding: 0.5rem 0.75rem;
   border-radius: 8px;
-  font-size: 13px;
+  font-size: 0.82rem;
   color: #9ca3af;
   cursor: pointer;
   text-decoration: none;
@@ -78,9 +86,10 @@
   color: #93c5fd;
   background: #1e3a8a;
   border-left-color: #2563eb;
+  font-weight: 600;
 }
 
-/* ── Main ─────────────────────────────────────────────────────────────── */
+/* ── Main zone ───────────────────────────────────────────────────── */
 .admin-main {
   flex: 1;
   display: flex;
@@ -88,43 +97,46 @@
   overflow: hidden;
 }
 
-/* ── Topbar ───────────────────────────────────────────────────────────── */
+/* ── Topbar — même style que la navbar du chatbot ────────────────── */
 .admin-topbar {
   display: flex;
   align-items: flex-end;
   justify-content: space-between;
-  padding: 20px 24px 16px;
+  padding: 0.875rem 1.5rem;
   background: #fff;
   border-bottom: 1px solid #e5e7eb;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.05);
 }
 
 .breadcrumb {
   display: flex;
   align-items: center;
   gap: 6px;
-  margin-bottom: 6px;
+  margin-bottom: 4px;
 }
 .bc-item {
-  font-size: 11px;
+  font-size: 0.7rem;
   color: #9ca3af;
   text-transform: uppercase;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.07em;
   font-weight: 600;
 }
 .bc-item--active { color: #2563eb; }
 
 .page-title {
-  font-size: 22px;
+  font-size: 1.2rem;
   font-weight: 700;
   color: #111827;
   margin: 0;
 }
 .page-sub {
-  font-size: 12px;
+  font-size: 0.78rem;
   color: #6b7280;
-  margin: 3px 0 0;
+  margin: 2px 0 0;
+  font-weight: 400;
 }
 
+/* Bouton create — identique au new-chat-btn du chatbot */
 .btn-create {
   display: flex;
   align-items: center;
@@ -132,75 +144,103 @@
   background: #2563eb;
   color: #fff;
   border: none;
-  border-radius: 9px;
-  padding: 9px 16px;
-  font-size: 13px;
+  border-radius: 8px;
+  padding: 0.6rem 1rem;
+  font-size: 0.875rem;
   font-weight: 600;
   cursor: pointer;
-  transition: background 0.15s, transform 0.1s;
+  transition: background 0.15s;
   white-space: nowrap;
 }
 .btn-create:hover  { background: #1d4ed8; }
-.btn-create:active { transform: scale(0.97); }
+.btn-create:disabled { background: #93c5fd; cursor: not-allowed; }
 
-/* ── Metrics ──────────────────────────────────────────────────────────── */
+/* ── Metric cards ─────────────────────────────────────────────────── */
 .metrics-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  gap: 14px;
-  padding: 16px 24px;
+  gap: 12px;
+  padding: 1rem 1.5rem 0.75rem;
 }
 
 .metric-card {
   background: #fff;
-  border: 1px solid #f3f4f6;
+  border: 1px solid #e5e7eb;
   border-radius: 10px;
-  padding: 14px 18px;
+  padding: 0.875rem 1rem;
   box-shadow: 0 1px 3px rgba(0,0,0,0.04);
 }
 
 .metric-label {
-  font-size: 11px;
+  font-size: 0.7rem;
   font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: #9ca3af;
-  margin-bottom: 6px;
+  letter-spacing: 0.07em;
+  color: #6b7280;
+  margin-bottom: 5px;
 }
 
 .metric-value {
-  font-size: 24px;
+  font-size: 1.4rem;
   font-weight: 700;
   color: #111827;
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 7px;
 }
 
 .metric-badge {
-  font-size: 10px;
+  font-size: 0.65rem;
   font-weight: 600;
-  padding: 2px 8px;
+  padding: 2px 7px;
   border-radius: 20px;
 }
 .badge-up   { background: #dcfce7; color: #15803d; }
 .badge-warn { background: #fef3c7; color: #92400e; }
 .badge-ok   { background: #dbeafe; color: #1e40af; }
 
-/* ── Toolbar ──────────────────────────────────────────────────────────── */
-.toolbar {
+/* ── Error banner ─────────────────────────────────────────────────── */
+.error-banner {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 0 24px 12px;
+  margin: 0 1.5rem 10px;
+  padding: 10px 14px;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 8px;
+  font-size: 0.8rem;
+  color: #b91c1c;
+}
+.error-banner svg { flex-shrink: 0; }
+.error-banner span { flex: 1; }
+
+.btn-retry {
+  background: none;
+  border: 1px solid #fca5a5;
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #b91c1c;
+  cursor: pointer;
+}
+.btn-retry:hover { background: #fee2e2; }
+
+/* ── Toolbar ──────────────────────────────────────────────────────── */
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 1.5rem 10px;
 }
 
 .filter-sel {
   background: #fff;
   border: 1px solid #e5e7eb;
   border-radius: 8px;
-  padding: 7px 10px;
-  font-size: 12px;
+  padding: 6px 10px;
+  font-size: 0.8rem;
   color: #374151;
   cursor: pointer;
   font-family: inherit;
@@ -222,10 +262,10 @@
 }
 .search-input {
   width: 100%;
-  padding: 7px 10px 7px 32px;
+  padding: 6px 10px 6px 30px;
   border: 1px solid #e5e7eb;
   border-radius: 8px;
-  font-size: 12px;
+  font-size: 0.8rem;
   color: #111827;
   font-family: inherit;
   background: #fff;
@@ -234,41 +274,28 @@
 .search-input:focus { outline: none; border-color: #2563eb; }
 .search-input::placeholder { color: #9ca3af; }
 
-.view-toggle {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 34px;
-  height: 34px;
-  border: 1px solid #e5e7eb;
-  border-radius: 8px;
-  background: #fff;
-  cursor: pointer;
-  color: #6b7280;
-  transition: background 0.15s;
-}
-.view-toggle:hover { background: #f9fafb; }
-
-/* ── Table ────────────────────────────────────────────────────────────── */
+/* ── Table ────────────────────────────────────────────────────────── */
 .table-wrap {
   flex: 1;
   overflow-y: auto;
-  margin: 0 24px;
-  border: 1px solid #f3f4f6;
+  margin: 0 1.5rem;
+  border: 1px solid #e5e7eb;
   border-radius: 10px;
   background: #fff;
   box-shadow: 0 1px 3px rgba(0,0,0,0.04);
 }
+.table-wrap::-webkit-scrollbar { width: 6px; }
+.table-wrap::-webkit-scrollbar-thumb { background: #d1d5db; border-radius: 4px; }
 
 .rules-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 12px;
+  font-size: 0.8rem;
 }
 
 .rules-table th {
   text-align: left;
-  font-size: 11px;
+  font-size: 0.7rem;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.05em;
@@ -281,7 +308,6 @@
   z-index: 1;
 }
 
-/* Column widths */
 .col-id      { width: 26%; }
 .col-domain  { width: 13%; }
 .col-trigger { width: 23%; }
@@ -290,25 +316,25 @@
 .col-actions { width: 11%; }
 
 .rules-table td {
-  padding: 12px 14px;
+  padding: 11px 14px;
   border-bottom: 1px solid #f9fafb;
   vertical-align: middle;
   color: #111827;
 }
 
 .rule-row:last-child td { border-bottom: none; }
-.rule-row:hover td      { background: #fafafa; }
+.rule-row:hover td { background: #f9fafb; }
 
-.rule-name { font-size: 12px; font-weight: 600; color: #111827; }
-.rule-id   { font-size: 10px; color: #9ca3af; font-family: 'Courier New', monospace; margin-top: 2px; }
+.rule-name { font-size: 0.8rem; font-weight: 600; color: #111827; }
+.rule-id   { font-size: 0.65rem; color: #9ca3af; font-family: 'Courier New', monospace; margin-top: 2px; }
 
 /* Domain badges */
 .domain-badge {
   display: inline-block;
-  font-size: 10px;
+  font-size: 0.65rem;
   font-weight: 600;
   padding: 3px 8px;
-  border-radius: 4px;
+  border-radius: 20px;
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
@@ -319,20 +345,20 @@
 .domain-behavioral { background: #fce7f3; color: #9d174d; }
 
 /* Trigger */
-.trigger-main   { font-size: 12px; color: #111827; }
-.trigger-detail { font-size: 10px; color: #9ca3af; margin-top: 2px; }
+.trigger-main   { font-size: 0.8rem; color: #111827; }
+.trigger-detail { font-size: 0.68rem; color: #9ca3af; margin-top: 2px; }
 
 /* Impact bar */
-.impact-row  { display: flex; align-items: center; gap: 8px; }
-.impact-bar  { flex: 1; max-width: 72px; height: 6px; background: #f3f4f6; border-radius: 3px; overflow: hidden; }
+.impact-row  { display: flex; align-items: center; gap: 7px; }
+.impact-bar  { flex: 1; max-width: 64px; height: 5px; background: #f3f4f6; border-radius: 3px; overflow: hidden; }
 .impact-fill { height: 100%; border-radius: 3px; transition: width 0.3s ease; }
 .impact-high { background: #dc2626; color: #b91c1c; }
 .impact-med  { background: #f59e0b; color: #92400e; }
 .impact-low  { background: #22c55e; color: #15803d; }
-.impact-label { font-size: 10px; font-weight: 600; text-transform: uppercase; }
-.impact-pts  { font-size: 10px; color: #9ca3af; margin-top: 2px; }
+.impact-label { font-size: 0.65rem; font-weight: 600; text-transform: uppercase; }
+.impact-pts  { font-size: 0.68rem; color: #9ca3af; margin-top: 2px; }
 
-/* Toggle */
+/* Toggle — même style que les toggles du chatbot */
 .toggle {
   position: relative;
   display: inline-block;
@@ -360,18 +386,15 @@
   transition: transform 0.2s;
   box-shadow: 0 1px 3px rgba(0,0,0,0.15);
 }
-.toggle input:checked + .toggle-track              { background: #2563eb; }
-.toggle input:checked + .toggle-track::before      { transform: translateX(16px); }
+.toggle input:checked + .toggle-track { background: #2563eb; }
+.toggle input:checked + .toggle-track::before { transform: translateX(16px); }
 
-.status-text  { font-size: 10px; margin-top: 3px; font-weight: 500; }
+.status-text  { font-size: 0.68rem; margin-top: 3px; font-weight: 500; }
 .status-active { color: #16a34a; }
 .status-paused { color: #9ca3af; }
 
 /* Action buttons */
-.actions-row {
-  display: flex;
-  gap: 5px;
-}
+.actions-row { display: flex; gap: 5px; }
 .action-btn {
   display: flex;
   align-items: center;
@@ -380,7 +403,7 @@
   border: 1px solid #e5e7eb;
   border-radius: 6px;
   padding: 5px 9px;
-  font-size: 11px;
+  font-size: 0.7rem;
   font-weight: 500;
   color: #6b7280;
   cursor: pointer;
@@ -402,17 +425,17 @@
   text-align: center;
   padding: 48px 20px !important;
   color: #9ca3af;
-  font-size: 13px;
+  font-size: 0.82rem;
 }
 .empty-state svg { display: block; margin: 0 auto 12px; }
 
-/* ── Table footer ─────────────────────────────────────────────────────── */
+/* ── Table footer ─────────────────────────────────────────────────── */
 .table-footer {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 10px 24px;
-  font-size: 12px;
+  padding: 10px 1.5rem;
+  font-size: 0.75rem;
   color: #6b7280;
   border-top: 1px solid #f3f4f6;
   background: #fff;
@@ -425,7 +448,7 @@
   border: 1px solid #e5e7eb;
   border-radius: 6px;
   background: none;
-  font-size: 12px;
+  font-size: 0.75rem;
   color: #6b7280;
   cursor: pointer;
   display: flex;
@@ -439,7 +462,7 @@
   border-color: #2563eb;
 }
 
-/* ── Toast ────────────────────────────────────────────────────────────── */
+/* ── Toast — même style que le chatbot ────────────────────────────── */
 .toast {
   position: fixed;
   bottom: 24px;
@@ -450,7 +473,7 @@
   gap: 8px;
   padding: 10px 16px;
   border-radius: 10px;
-  font-size: 13px;
+  font-size: 0.82rem;
   font-weight: 500;
   box-shadow: 0 4px 16px rgba(0,0,0,0.14);
   animation: toastIn 0.2s ease;
@@ -461,3 +484,34 @@
 }
 .toast--success { background: #111827; color: #fff; }
 .toast--error   { background: #dc2626; color: #fff; }
+
+/* ── Skeleton loading ─────────────────────────────────────────────── */
+.skeleton-rows { padding: 8px 0; }
+.skeleton-row {
+  display: grid;
+  grid-template-columns: 26% 13% 23% 16% 11% 11%;
+  align-items: center;
+  padding: 13px 14px;
+  border-bottom: 1px solid #f9fafb;
+  gap: 14px;
+}
+.skel {
+  background: linear-gradient(90deg, #f3f4f6 25%, #e9eaeb 50%, #f3f4f6 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.4s infinite;
+  border-radius: 4px;
+  height: 12px;
+}
+@keyframes shimmer {
+  0%   { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+.skel--name    { width: 70%; height: 14px; }
+.skel--badge   { width: 60px; height: 20px; border-radius: 20px; }
+.skel--text    { width: 80%; }
+.skel--bar     { width: 90px; height: 8px; border-radius: 4px; }
+.skel--toggle  { width: 34px; height: 18px; border-radius: 9px; }
+.skel--actions { width: 80px; height: 28px; border-radius: 6px; }
+.skel--metric  { width: 60px; height: 24px; border-radius: 4px; }
+
+.loading-text { font-size: 0.75rem; color: #9ca3af; font-style: italic; }

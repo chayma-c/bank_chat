@@ -1,12 +1,47 @@
 import os
 import re
 import httpx
+import json
+import logging
 from langchain_groq import ChatGroq
 from langchain_ollama import ChatOllama
 from langchain_core.messages import SystemMessage, AIMessage, HumanMessage
 from .state import BankChatState
 
+logger = logging.getLogger(__name__)
+
 FRAUD_SERVICE_URL = os.getenv("FRAUD_SERVICE_URL", "http://fraud-service:8001")
+MAIL_SERVICE_URL  = os.getenv("MAIL_SERVICE_URL",  "http://mail-service:8002")
+ALERT_EMAIL       = os.getenv("ALERT_EMAIL",        "compliance@yourbank.com")
+
+# ── MAIL_AGENT_SYSTEM ─────────────────────────────────────────────────────────
+# Utilisé UNIQUEMENT pour composer le sujet et le contexte du mail.
+# La décision d'envoyer est déterministe (pas de LLM pour ça).
+MAIL_AGENT_SYSTEM = """\
+You are a banking compliance mail agent. Your only job is to compose email metadata.
+
+You MUST respond with ONLY a valid JSON object — no markdown, no explanation, no backticks.
+The JSON must start with { and end with }.
+
+Response format (strictly):
+{
+  "subject": "concise subject line in French",
+  "template": "fraud_alert" | "critical_alert",
+  "context": {
+    "iban": "...",
+    "score_final": 0,
+    "risk_level": "...",
+    "tracfin_required": false,
+    "llm_summary": "...",
+    "download_url": "...",
+    "triggered_count": 0
+  }
+}
+
+Rules for template selection:
+- score_final >= 80 OR tracfin_required = true → use "critical_alert"
+- score_final >= 50 AND score_final < 80       → use "fraud_alert"
+"""
 
 # ── IBAN extraction helper ────────────────────────────────────────────────────
 
@@ -18,11 +53,6 @@ IBAN_PATTERN = re.compile(
 )
 
 def extract_iban(messages: list) -> str:
-    """
-    Extrait le premier IBAN trouvé dans la liste de messages.
-    Parcourt du plus récent au plus ancien.
-    Retourne "" si aucun IBAN trouvé.
-    """
     for msg in reversed(messages):
         content = msg.content if hasattr(msg, "content") else str(msg)
         match = IBAN_PATTERN.search(content)
@@ -31,11 +61,10 @@ def extract_iban(messages: list) -> str:
     return ""
 
 
-# ── Configuration du LLM (Groq ou Ollama) ────────────────────────────────────
+# ── Configuration du LLM ─────────────────────────────────────────────────────
 
 def get_llm():
     provider = os.getenv("LLM_PROVIDER", "groq").lower()
-
     if provider == "ollama":
         base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
         model    = os.getenv("OLLAMA_MODEL", "llama3.2")
@@ -65,7 +94,7 @@ SYSTEM_PROMPTS = {
         "Be professional, precise and concise. Never ask for passwords or PINs. "
         "If real account data is needed, explain that the customer must log in to the secure portal."
         "Response policy: - Match answer length to the complexity of the user's request. - Use the minimum words necessary to fully answer. - Start with a direct answer first. - Prefer 1–3 sentences for simple questions. - Use bullets for multi-step explanations. - Avoid repetition, filler, and unnecessary context. - Keep responses under 120 words unless the user asks for more detail. - Expand only when clarification improves usefulness."
-        "Response Layout Rules:  - Start with a direct answer - Keep paragraphs short (1–3 lines) - Use headings for long answers - Use bullets for lists and steps - Use numbered lists for processes - Separate sections with blank lines - Prioritize readability and scanability - Avoid dense text blocks"
+        "Response Layout Rules: - Start with a direct answer - Keep paragraphs short (1–3 lines) - Use headings for long answers - Use bullets for lists and steps - Use numbered lists for processes - Separate sections with blank lines - Prioritize readability and scanability - Avoid dense text blocks"
     ),
     "transfer_agent": (
         "You are BankChat, a specialized banking assistant for money transfers and payments. "
@@ -74,7 +103,7 @@ SYSTEM_PROMPTS = {
         "international fees and currency conversion. "
         "Always stress the importance of verifying recipient details before confirming a transfer."
         "Response policy: - Match answer length to the complexity of the user's request. - Use the minimum words necessary to fully answer. - Start with a direct answer first. - Prefer 1–3 sentences for simple questions. - Use bullets for multi-step explanations. - Avoid repetition, filler, and unnecessary context. - Keep responses under 120 words unless the user asks for more detail. - Expand only when clarification improves usefulness."
-        "Response Layout Rules:  - Start with a direct answer - Keep paragraphs short (1–3 lines) - Use headings for long answers - Use bullets for lists and steps - Use numbered lists for processes - Separate sections with blank lines - Prioritize readability and scanability - Avoid dense text blocks"
+        "Response Layout Rules: - Start with a direct answer - Keep paragraphs short (1–3 lines) - Use headings for long answers - Use bullets for lists and steps - Use numbered lists for processes - Separate sections with blank lines - Prioritize readability and scanability - Avoid dense text blocks"
     ),
     "support_agent": (
         "You are BankChat, a specialized banking customer support agent. "
@@ -83,7 +112,7 @@ SYSTEM_PROMPTS = {
         "account opening procedures, loan and mortgage inquiries, and product information. "
         "Be empathetic, patient and always offer a clear next step."
         "Response policy: - Match answer length to the complexity of the user's request. - Use the minimum words necessary to fully answer. - Start with a direct answer first. - Prefer 1–3 sentences for simple questions. - Use bullets for multi-step explanations. - Avoid repetition, filler, and unnecessary context. - Keep responses under 120 words unless the user asks for more detail. - Expand only when clarification improves usefulness."
-        "Response Layout Rules:  - Start with a direct answer - Keep paragraphs short (1–3 lines) - Use headings for long answers - Use bullets for lists and steps - Use numbered lists for processes - Separate sections with blank lines - Prioritize readability and scanability - Avoid dense text blocks"
+        "Response Layout Rules: - Start with a direct answer - Keep paragraphs short (1–3 lines) - Use headings for long answers - Use bullets for lists and steps - Use numbered lists for processes - Separate sections with blank lines - Prioritize readability and scanability - Avoid dense text blocks"
     ),
     "fallback": (
         "You are BankChat, a professional AI banking assistant for a modern retail bank. "
@@ -92,7 +121,7 @@ SYSTEM_PROMPTS = {
         "If a question is completely unrelated to banking or finance, politely let the customer know "
         "you are specialized in banking services and redirect them appropriately."
         "Response policy: - Match answer length to the complexity of the user's request. - Use the minimum words necessary to fully answer. - Start with a direct answer first. - Prefer 1–3 sentences for simple questions. - Use bullets for multi-step explanations. - Avoid repetition, filler, and unnecessary context. - Keep responses under 120 words unless the user asks for more detail. - Expand only when clarification improves usefulness."
-        "Response Layout Rules:  - Start with a direct answer - Keep paragraphs short (1–3 lines) - Use headings for long answers - Use bullets for lists and steps - Use numbered lists for processes - Separate sections with blank lines - Prioritize readability and scanability - Avoid dense text blocks"
+        "Response Layout Rules: - Start with a direct answer - Keep paragraphs short (1–3 lines) - Use headings for long answers - Use bullets for lists and steps - Use numbered lists for processes - Separate sections with blank lines - Prioritize readability and scanability - Avoid dense text blocks"
     ),
     "fraud_agent": (
         "You are BankChat, a specialized expert in banking security and fraud detection. "
@@ -102,33 +131,59 @@ SYSTEM_PROMPTS = {
         "Be alarming but professional when a potential risk is detected, and always provide "
         "clear, actionable security advice."
         "Response policy: - Match answer length to the complexity of the user's request. - Use the minimum words necessary to fully answer. - Start with a direct answer first. - Prefer 1–3 sentences for simple questions. - Use bullets for multi-step explanations. - Avoid repetition, filler, and unnecessary context. - Keep responses under 120 words unless the user asks for more detail. - Expand only when clarification improves usefulness."
-        "Response Layout Rules:  - Start with a direct answer - Keep paragraphs short (1–3 lines) - Use headings for long answers - Use bullets for lists and steps - Use numbered lists for processes - Separate sections with blank lines - Prioritize readability and scanability - Avoid dense text blocks"
+        "Response Layout Rules: - Start with a direct answer - Keep paragraphs short (1–3 lines) - Use headings for long answers - Use bullets for lists and steps - Use numbered lists for processes - Separate sections with blank lines - Prioritize readability and scanability - Avoid dense text blocks"
     ),
 }
+
+
+# ── Helper : appel au mail-service ───────────────────────────────────────────
+
+def call_mail_service(payload: dict) -> dict:
+    """Appel HTTP au mail-service. Log l'erreur sans faire planter le graph."""
+    try:
+        r = httpx.post(f"{MAIL_SERVICE_URL}/send", json=payload, timeout=15.0)
+        r.raise_for_status()
+        return r.json()
+    except Exception as e:
+        logger.warning(f"[mail] Mail service unreachable or error: {e}")
+        return {"status": "error", "detail": str(e)}
+
+
+# ── Helper : extraction JSON robuste ─────────────────────────────────────────
+
+def _extract_json(text: str) -> dict | None:
+    """
+    Extrait le premier objet JSON valide d'une chaîne, même si le LLM
+    a ajouté du texte avant/après les accolades.
+    """
+    text  = text.replace("```json", "").replace("```", "").strip()
+    start = text.find("{")
+    end   = text.rfind("}")
+    if start == -1 or end == -1 or end <= start:
+        return None
+    try:
+        return json.loads(text[start:end + 1])
+    except json.JSONDecodeError:
+        return None
+
 
 # ── Intent detection ──────────────────────────────────────────────────────────
 
 def detect_intent(state: BankChatState) -> BankChatState:
-    # ── Règle 0 : Override par l'utilisateur (Select Agent) ────────────────────
+    # ── Règle 0 : Override par l'utilisateur ───────────────────────────────────
     selected = state.get("selected_agent")
     if selected and selected not in ("orchestrator", "auto"):
-        # Normalisation si nécessaire
         if selected == "sql":
             selected = "text_to_sql"
-            
         valid_intents = ("account", "transfer", "support", "fraud", "text_to_sql")
         if selected in valid_intents:
             print(f"🎯 User selected agent override: {selected}")
             return {**state, "intent": selected}
 
-    last_msg = state["messages"][-1].content
+    last_msg  = state["messages"][-1].content
     msg_lower = last_msg.lower()
-    import re
-    IBAN_PATTERN = re.compile(r'\b(IBAN_\w+|[A-Z]{2}\d{2}[\w\s]{10,30})\b', re.IGNORECASE)
+    IBAN_PAT  = re.compile(r'\b(IBAN_\w+|[A-Z]{2}\d{2}[\w\s]{10,30})\b', re.IGNORECASE)
 
-    # ── Règle 1 : LLM pour la compréhension du contexte ────────────────────────
-    # On exécute le LLM en premier pour bien différencier une analyse de fraude
-    # d'une question générale sur la fraude qui devrait aller vers "support".
     prompt = (
         "You are a strict banking intent classifier. "
         "Reply with EXACTLY one word, nothing else, no punctuation.\n\n"
@@ -152,27 +207,20 @@ def detect_intent(state: BankChatState) -> BankChatState:
     if intent not in ("account", "transfer", "support", "fraud"):
         intent = "fallback"
 
-    # ── Règle 2 : Regex & Keywords (Sécurité / Override) ──────────────────────
-    # Si le LLM se trompe ou que l'utilisateur donne un IBAN avec un but clair.
-
     FRAUD_ACTION_KEYWORDS = [
-        "analyse", "vérifie", "verif", "check", "detect", 
-        "export", "évaluer", "scan", "tester"
+        "analyse", "vérifie", "verif", "check", "detect",
+        "export", "évaluer", "scan", "tester", "envoie", "envoyer", "mail", "email"
     ]
-    
     FRAUD_KEYWORDS = [
         "fraude", "fraud", "anomalie", "anomal", "suspect",
         "iban_", "blanchiment", "aml", "tracfin", "risque", "arnaque", "vol"
     ]
 
-    has_iban = bool(IBAN_PATTERN.search(last_msg))
+    has_iban = bool(IBAN_PAT.search(last_msg))
 
-    # Condition override 1 : IBAN explicitement présent + mot-clé fort = forcing fraud
     if intent != "fraud" and has_iban and any(kw in msg_lower for kw in FRAUD_KEYWORDS + FRAUD_ACTION_KEYWORDS):
         print(f"🧠 Detected intent override: fraud (IBAN + keyword match from: '{last_msg[:80]}')")
         intent = "fraud"
-    
-    # Condition override 2 : Message très court et direct (ex: "signaler arnaque", "fraude détectée")
     elif intent != "fraud" and len(msg_lower.split()) <= 4 and any(kw in msg_lower for kw in FRAUD_KEYWORDS):
         print(f"🧠 Detected intent override: fraud (short keyword phrase from: '{last_msg[:80]}')")
         intent = "fraud"
@@ -204,26 +252,23 @@ def _run_agent(state: BankChatState, agent_key: str) -> BankChatState:
         "agent":    agent_key,
     }
 
-def account_agent(state: BankChatState) -> BankChatState:
-    return _run_agent(state, "account_agent")
+def account_agent(state: BankChatState)  -> BankChatState: return _run_agent(state, "account_agent")
+def transfer_agent(state: BankChatState) -> BankChatState: return _run_agent(state, "transfer_agent")
+def support_agent(state: BankChatState)  -> BankChatState: return _run_agent(state, "support_agent")
+def handle_fallback(state: BankChatState)-> BankChatState: return _run_agent(state, "fallback")
 
-def transfer_agent(state: BankChatState) -> BankChatState:
-    return _run_agent(state, "transfer_agent")
-
-def support_agent(state: BankChatState) -> BankChatState:
-    return _run_agent(state, "support_agent")
 
 def fraud_agent(state: BankChatState) -> BankChatState:
     """
-    Smart Fraud Agent node for LangGraph.
-    Decides between technical analysis and expert advice.
+    Smart Fraud Agent : ANALYZE (appel HTTP fraud-service) ou TALK (expert LLM).
+    En path ANALYZE, stocke le résultat brut dans state['context'] pour mail_agent.
     """
     last_msg = ""
     for msg in reversed(state["messages"]):
         if msg.__class__.__name__ == "HumanMessage":
             last_msg = msg.content
             break
-    
+
     decision_prompt = (
         "You are a fraud detection reasoning engine. "
         "Based on the user's message, decide if we need to call a technical tool (ANALYZE) "
@@ -239,7 +284,7 @@ def fraud_agent(state: BankChatState) -> BankChatState:
 
     try:
         decision_resp = llm.invoke(decision_prompt).content
-        lines = decision_resp.strip().split("\n")
+        lines     = decision_resp.strip().split("\n")
         reasoning = "Analyse de la requête..."
         decision  = "TALK"
         for line in lines:
@@ -252,7 +297,7 @@ def fraud_agent(state: BankChatState) -> BankChatState:
 
         if decision == "ANALYZE":
             iban = extract_iban(state["messages"])
-            response = httpx.post(
+            resp = httpx.post(
                 f"{FRAUD_SERVICE_URL}/analyze",
                 json={
                     "message":    last_msg,
@@ -264,47 +309,161 @@ def fraud_agent(state: BankChatState) -> BankChatState:
                 },
                 timeout=120.0,
             )
-            response.raise_for_status()
-            result = response.json()
-            ai_response = prefix + (result.get("llm_summary") or result.get("summary") or "Analyse terminée.")
+            resp.raise_for_status()
+            result = resp.json()
+
+            logger.info(
+                f"[fraud_agent] ANALYZE done — IBAN={result.get('iban')} "
+                f"score={result.get('score_final')} risk={result.get('risk_level')} "
+                f"tracfin={result.get('tracfin_required')}"
+            )
+
+            ai_response = prefix + (
+                result.get("llm_summary") or
+                result.get("summary") or
+                "Analyse terminée."
+            )
             return {
                 **state,
                 "messages": [AIMessage(content=ai_response)],
                 "agent":    "fraud_agent",
-                "context":  result
+                "context":  result,   # ← mail_agent lira ce dict
             }
         else:
-            # Path : TALK
             system = SystemMessage(content=SYSTEM_PROMPTS["fraud_agent"])
-            messages_with_system = [system] + list(state["messages"])
-            response = llm.invoke(messages_with_system)
+            resp   = llm.invoke([system] + list(state["messages"]))
             return {
                 **state,
-                "messages": [AIMessage(content=prefix + response.content)],
+                "messages": [AIMessage(content=prefix + resp.content)],
                 "agent":    "fraud_agent",
+                "context":  {},   # pas d'analyse → pas de mail
             }
 
     except Exception as e:
+        logger.exception("[fraud_agent] Error")
         return {
             **state,
             "messages": [AIMessage(content=f"❌ Erreur agent fraude : {str(e)}")],
             "agent":    "fraud_agent",
+            "context":  {},
         }
 
-def handle_fallback(state: BankChatState) -> BankChatState:
-    return _run_agent(state, "fallback")
+
+# ── Mail agent (agentique hybride) ────────────────────────────────────────────
+
+def mail_agent(state: BankChatState) -> BankChatState:
+    """
+    Nœud agentique mail hybride :
+      1. Décision DÉTERMINISTE sur seuils (score/TRACFIN) — fiable, sans LLM
+      2. Composition du sujet/contexte via LLM — avec fallback robuste si parse échoue
+      3. Appel HTTP au mail-service
+
+    Appelé uniquement après fraud_agent path ANALYZE (context non vide via orchestrator).
+    """
+    context     = state.get("context", {})
+    score_final = context.get("score_final", 0)
+    tracfin     = context.get("tracfin_required", False)
+    iban        = context.get("iban", "")
+
+    # ── Étape 1 : Décision déterministe (PAS de LLM) ─────────────────────────
+    logger.info(
+        f"[mail_agent] Evaluating — IBAN={iban} score={score_final} "
+        f"tracfin={tracfin} risk={context.get('risk_level')}"
+    )
+
+    should_send = score_final >= 50 or tracfin
+    if not should_send:
+        logger.info(f"[mail_agent] score={score_final} < 50 and tracfin=False — no mail.")
+        return {**state, "agent": "mail_agent"}
+
+    # Choix du template selon seuil
+    template = "critical_alert" if (score_final >= 80 or tracfin) else "fraud_alert"
+
+    # ── Fallback sujet + contexte (utilisé si LLM échoue) ────────────────────
+    subject = (
+        f"[BankChat] 🔴 Alerte critique score {score_final}/100 — "
+        f"{context.get('risk_level', '')} — IBAN {iban}"
+        if template == "critical_alert" else
+        f"[BankChat] ⚠️ Alerte fraude score {score_final}/100 — IBAN {iban}"
+    )
+    mail_context = {
+        "iban":             iban,
+        "score_final":      score_final,
+        "risk_level":       context.get("risk_level", ""),
+        "tracfin_required": tracfin,
+        "llm_summary":      context.get("llm_summary", ""),
+        "download_url":     context.get("download_url", ""),
+        "triggered_count":  len(context.get("fraud_results", [])),
+    }
+
+    # ── Étape 2 : LLM pour composer sujet + contexte (avec fallback) ─────────
+    context_for_llm = json.dumps({
+        **mail_context,
+        "alert_email":  ALERT_EMAIL,
+        "session_id":   state.get("session_id", ""),
+        "user_id":      state.get("user_id", "anonymous"),
+    }, ensure_ascii=False)
+
+    try:
+        llm_resp = llm.invoke([
+            SystemMessage(content=MAIL_AGENT_SYSTEM),
+            HumanMessage(content=f"Fraud analysis result:\n{context_for_llm}"),
+        ])
+        parsed = _extract_json(llm_resp.content)
+        if parsed:
+            subject      = parsed.get("subject", subject)
+            template     = parsed.get("template", template)
+            mail_context = parsed.get("context", mail_context)
+            logger.info(f"[mail_agent] LLM composed — template={template} subject={subject}")
+        else:
+            logger.warning(
+                f"[mail_agent] LLM returned unparseable content, using fallback. "
+                f"Raw (200): {llm_resp.content[:200]}"
+            )
+    except Exception as e:
+        logger.warning(f"[mail_agent] LLM composition failed, using fallback: {e}")
+
+    # ── Étape 3 : Envoi via mail-service ─────────────────────────────────────
+    payload = {
+        "to":              ALERT_EMAIL,
+        "subject":         subject,
+        "template":        template,
+        "context":         mail_context,
+        "attachment_path": context.get("report_path") or None,
+    }
+
+    logger.info(f"[mail_agent] → Calling mail-service: to={ALERT_EMAIL} subject={subject}")
+    result = call_mail_service(payload)
+    status = result.get("status", "error")
+
+    if status == "sent":
+        logger.info(f"[mail_agent] ✅ Email sent → {ALERT_EMAIL}")
+    else:
+        logger.error(f"[mail_agent] ❌ Email FAILED: {result.get('detail')}")
+
+    updated_context = {
+        **context,
+        "mail_results": [{"to": ALERT_EMAIL, "subject": subject, "status": status}]
+    }
+    return {
+        **state,
+        "agent":   "mail_agent",
+        "context": updated_context,
+    }
 
 
 # ── Streaming helper ──────────────────────────────────────────────────────────
 
+
+
 def stream_agent_response(intent: str, messages: list):
     """
-    Yields (token, agent_key) tuples.
-    Pour le fraud intent : appel HTTP au fraud-service (pas de streaming token par token).
-    Pour les autres agents : streaming LLM natif.
+    Yields (token, agent_key) tuples — ou (token, agent_key, fraud_result) pour fraud ANALYZE.
+
+    CORRECTION : en path ANALYZE, yield un 3e élément (le dict résultat fraude brut)
+    sur le dernier yield. views.py le récupère pour appeler mail_agent ensuite.
     """
     if intent == "fraud":
-        # 1. Décision : Analyse technique ou Discussion d'expert ?
         last_msg = ""
         for msg in reversed(messages):
             if msg.__class__.__name__ == "HumanMessage":
@@ -326,10 +485,9 @@ def stream_agent_response(intent: str, messages: list):
 
         try:
             decision_resp = llm.invoke(decision_prompt).content
-            lines = decision_resp.strip().split("\n")
+            lines     = decision_resp.strip().split("\n")
             reasoning = "Analyse de la requête..."
             decision  = "TALK"
-            
             for line in lines:
                 if line.upper().startswith("REASONING:"):
                     reasoning = line.split(":", 1)[1].strip()
@@ -340,7 +498,7 @@ def stream_agent_response(intent: str, messages: list):
 
             if decision == "ANALYZE":
                 iban = extract_iban(messages)
-                response = httpx.post(
+                resp = httpx.post(
                     f"{FRAUD_SERVICE_URL}/analyze",
                     json={
                         "message":    last_msg,
@@ -352,15 +510,20 @@ def stream_agent_response(intent: str, messages: list):
                     },
                     timeout=120.0,
                 )
-                response.raise_for_status()
-                result  = response.json()
+                resp.raise_for_status()
+                result  = resp.json()
                 summary = result.get("llm_summary", result.get("summary", "Analyse de fraude terminée."))
-                yield summary, "fraud_agent"
+
+                # ── CORRECTION : yield le résultat brut en 3e élément ──────────
+                # views.py (StreamChatView) le récupère avec :
+                #   for token, agent_key, *extra in stream_agent_response(...)
+                # et appelle mail_agent(state_with_context=result) ensuite.
+                yield summary, "fraud_agent", result
+
             else:
-                # Path : TALK (Expert advice)
+                # Path TALK — pas de résultat fraude brut
                 system = SystemMessage(content=SYSTEM_PROMPTS["fraud_agent"])
-                messages_with_system = [system] + list(messages)
-                for chunk in llm.stream(messages_with_system):
+                for chunk in llm.stream([system] + list(messages)):
                     token = chunk.content
                     if token:
                         yield token, "fraud_agent"
@@ -369,7 +532,7 @@ def stream_agent_response(intent: str, messages: list):
             yield f"❌ Erreur lors de la décision : {str(e)}", "fraud_agent"
         return
 
-    # Agents classiques — streaming token par token
+    # ── Agents classiques ─────────────────────────────────────────────────────
     agent_key_map = {
         "account":     "account_agent",
         "transfer":    "transfer_agent",
@@ -377,34 +540,29 @@ def stream_agent_response(intent: str, messages: list):
         "text_to_sql": "text_to_sql_agent",
         "sql":         "text_to_sql_agent",
     }
-    
     agent_key = agent_key_map.get(intent, "fallback")
 
-    # Si c'est le text_to_sql_agent, on fait l'appel HTTP (pas de stream token par token nativement ici)
     if agent_key == "text_to_sql_agent":
         last_user_msg = ""
         for msg in reversed(messages):
             if msg.__class__.__name__ == "HumanMessage":
                 last_user_msg = msg.content
                 break
-        
         try:
-            response = httpx.post(
-                f"{os.getenv('TEXT2SQL_SERVICE_URL', 'http://text-to-sql-service:8002')}/query",
+            resp = httpx.post(
+                f"{os.getenv('TEXT2SQL_SERVICE_URL', 'http://text-to-sql-service:8003')}/query",
                 json={"question": last_user_msg, "user_id": "anonymous"},
                 timeout=60.0,
             )
-            response.raise_for_status()
-            result = response.json()
+            resp.raise_for_status()
+            result = resp.json()
             yield result.get("explanation", "Query executed."), "text2sql_agent"
         except Exception as e:
             yield f"❌ Erreur service SQL : {str(e)}", "text2sql_agent"
         return
 
     system = SystemMessage(content=SYSTEM_PROMPTS.get(agent_key, SYSTEM_PROMPTS["fallback"]))
-    messages_with_system = [system] + list(messages)
-
-    for chunk in llm.stream(messages_with_system):
+    for chunk in llm.stream([system] + list(messages)):
         token = chunk.content
         if token:
             yield token, agent_key

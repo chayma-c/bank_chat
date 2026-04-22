@@ -12,7 +12,7 @@ from rest_framework.response import Response
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 
 from .graph.orchestrator import bank_graph
-from .graph.nodes import detect_intent, stream_agent_response, llm
+from .graph.nodes import detect_intent, stream_agent_response, llm, mail_agent
 from .graph.state import BankChatState
 from .models import Conversation, Message
 from .serializers import ConversationSerializer, MessageSerializer
@@ -26,14 +26,10 @@ FRAUD_SERVICE_URL = os.getenv("FRAUD_SERVICE_URL", "http://fraud-service:8001")
 memory_manager = MemoryManager(llm=llm)
 
 
-# ── Helper : appel HTTP au fraud-service ──────────────────────────────────────
+# ── Helper : appel HTTP au fraud-service ─────────────────────────────────────
 
 def call_fraud_service(iban: str, action: str, user_id: str,
                        session_id: str, excel_path: str) -> dict:
-    """
-    Envoie une requête au fraud-service microservice.
-    Lève une exception si le service est injoignable ou renvoie une erreur.
-    """
     response = httpx.post(
         f"{FRAUD_SERVICE_URL}/analyze",
         json={
@@ -52,12 +48,13 @@ def call_fraud_service(iban: str, action: str, user_id: str,
 # ── Vues ──────────────────────────────────────────────────────────────────────
 
 class ChatView(APIView):
+    """Mode non-streaming — passe par le graph LangGraph complet (mail_agent inclus)."""
     def post(self, request):
-        data       = request.data
-        user_id    = data.get("user_id", "anonymous")
+        data           = request.data
+        user_id        = data.get("user_id", "anonymous")
+        session_id     = data.get("session_id", str(uuid.uuid4()))
         message        = data.get("message")
-        selected_agent = data.get("agent") or data.get("selected_agent")  # Supporte 'agent' (frontend) ou 'selected_agent'
-        
+        selected_agent = data.get("selected_agent", None)
 
         if not message:
             return Response({"error": "message requis"}, status=400)
@@ -81,7 +78,6 @@ class ChatView(APIView):
         }
 
         try:
-            # Appel au graph pour obtenir la réponse de l'IA
             result      = bank_graph.invoke(initial_state)
             ai_response = result["messages"][-1].content
             agent_used  = result.get("agent", "unknown")
@@ -140,6 +136,12 @@ class HealthCheckView(APIView):
 
 @method_decorator(csrf_exempt, name='dispatch')
 class StreamChatView(View):
+    """
+    Mode streaming — génère les tokens en SSE.
+
+    CORRECTION : après une analyse fraude (path ANALYZE), appelle mail_agent
+    directement depuis generate() car stream_agent_response() bypass le graph.
+    """
     def post(self, request):
         try:
             data = json.loads(request.body)
@@ -149,10 +151,10 @@ class StreamChatView(View):
                 content_type='text/event-stream', status=400
             )
 
-        user_id    = data.get("user_id", "anonymous")
+        user_id        = data.get("user_id", "anonymous")
         session_id     = data.get("session_id", str(uuid.uuid4()))
         message        = data.get("message", "").strip()
-        selected_agent = data.get("agent") or data.get("selected_agent") # Supporte 'agent' ou 'selected_agent'
+        selected_agent = data.get("selected_agent", None)
 
         if not message:
             return StreamingHttpResponse(
@@ -177,20 +179,45 @@ class StreamChatView(View):
             "context":        {},
             "error":          None,
         }
+
+        # detect_intent retourne un state enrichi avec intent + messages
         intent_state = detect_intent(initial_state)
         intent       = intent_state["intent"]
 
         def generate():
             full_response = ""
             agent_used    = "fallback"
+            # fraud_result sera rempli si path ANALYZE — pour déclencher mail_agent ensuite
+            fraud_result  = None
+
             try:
-                for token, agent_key in stream_agent_response(intent, intent_state["messages"]):
+                for token, agent_key, *extra in stream_agent_response(intent, intent_state["messages"]):
                     full_response += token
                     agent_used     = agent_key
                     yield f'data: {json.dumps({"token": token, "agent": agent_key})}\n\n'
 
+                    # stream_agent_response peut yielder un 3e élément : le résultat fraude brut
+                    if extra and isinstance(extra[0], dict):
+                        fraud_result = extra[0]
+
+                # ── Sauvegarder les messages ───────────────────────────────────
                 Message.objects.create(conversation=conversation, role="user",      content=message)
                 Message.objects.create(conversation=conversation, role="assistant", content=full_response, agent_used=agent_used)
+
+                # ── Déclencher mail_agent si analyse fraude effectuée ──────────
+                # C'est ici que le mail est envoyé en mode streaming,
+                # car stream_agent_response() ne passe PAS par le graph LangGraph.
+                if agent_used == "fraud_agent" and fraud_result and fraud_result.get("iban"):
+                    try:
+                        mail_state: BankChatState = {
+                            **intent_state,
+                            "context": fraud_result,
+                            "agent":   "fraud_agent",
+                        }
+                        mail_agent(mail_state)
+                        logger.info(f"[StreamChatView] mail_agent called for IBAN={fraud_result.get('iban')}")
+                    except Exception as mail_err:
+                        logger.warning(f"[StreamChatView] mail_agent failed (non-blocking): {mail_err}")
 
                 yield f'data: {json.dumps({"done": True, "session_id": str(session_id), "agent": agent_used})}\n\n'
 
@@ -199,7 +226,7 @@ class StreamChatView(View):
                 yield f'data: {json.dumps({"error": str(e)})}\n\n'
 
         response = StreamingHttpResponse(generate(), content_type='text/event-stream')
-        response['Cache-Control']             = 'no-cache'
+        response['Cache-Control']              = 'no-cache'
         response['X-Accel-Buffering']          = 'no'
         response['Access-Control-Allow-Origin'] = 'http://localhost:4200'
         return response
@@ -213,18 +240,7 @@ class StreamChatView(View):
 
 
 class FraudAnalyzeView(APIView):
-    """
-    Direct fraud analysis endpoint — délègue au fraud-service via HTTP.
-
-    POST /api/v1/chatbot/fraud/analyze/
-    {
-        "iban": "IBAN_FR123",
-        "action": "fraud_check",
-        "user_id": "user123",
-        "session_id": "xxx",
-        "excel_path": ""
-    }
-    """
+    """Direct fraud analysis endpoint — délègue au fraud-service via HTTP."""
 
     def post(self, request):
         data       = request.data
@@ -242,11 +258,8 @@ class FraudAnalyzeView(APIView):
 
         try:
             result = call_fraud_service(
-                iban=iban,
-                action=action,
-                user_id=user_id,
-                session_id=session_id,
-                excel_path=excel_path,
+                iban=iban, action=action, user_id=user_id,
+                session_id=session_id, excel_path=excel_path,
             )
             return Response(result)
 
