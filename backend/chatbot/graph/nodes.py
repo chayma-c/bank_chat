@@ -430,6 +430,13 @@ def mail_agent(state: BankChatState) -> BankChatState:
         "template":        template,
         "context":         mail_context,
         "attachment_path": context.get("report_path") or None,
+        # ── Métadonnées pour la traçabilité BD ───────────────────────────────
+        "iban":            iban,
+        "score_final":     score_final,
+        "risk_level":      context.get("risk_level", ""),
+        "tracfin":         tracfin,
+        "session_id":      state.get("session_id", ""),
+        "user_id":         state.get("user_id", "anonymous"),
     }
 
     logger.info(f"[mail_agent] → Calling mail-service: to={ALERT_EMAIL} subject={subject}")

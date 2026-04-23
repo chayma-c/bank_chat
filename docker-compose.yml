@@ -268,8 +268,13 @@ services:
     container_name: bank_chat_mail
     env_file:
       - .env
+    environment:
+      MAIL_DATABASE_URL: postgresql://mail_user:mail_password@db:5432/mail_db
     ports:
       - "8002:8002"
+    depends_on:
+      db:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c",
              "import urllib.request; urllib.request.urlopen('http://localhost:8002/health')"]
