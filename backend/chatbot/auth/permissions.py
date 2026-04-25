@@ -68,39 +68,16 @@ class IsAuthenticated(BasePermission):
 # ─── Pre-defined Role Permissions ────────────────────────────────────────────
 
 class IsAdmin(BasePermission):
-    """Allows access to users with Keycloak admin roles."""
+    """
+    Allows access only to users with the explicit 'admin' realm role.
+    Prevents privilege confusion with internal Keycloak roles.
+    """
 
     def has_permission(self, request, view):
-        user = request.user
-
-        if not user or not isinstance(user, dict):
+        if not request.user or not isinstance(request.user, dict):
             return False
-
-        # Realm-level roles
-        realm_roles = user.get("realm_access", {}).get("roles", [])
-
-        # Client-level roles (Keycloak admin roles usually here)
-        client_roles = (
-            user.get("resource_access", {})
-            .get("realm-management", {})
-            .get("roles", [])
-        )
-
-        # Legacy/custom flat roles list (keep compatibility)
-        flat_roles = user.get("roles", [])
-
-        all_roles = set(realm_roles + client_roles + flat_roles)
-
-        allowed = {
-            "admin",
-            "realm-admin",
-            "manage-users",
-            "view-users",
-            "query-users",
-            "manage-realm",
-        }
-
-        return bool(all_roles.intersection(allowed))
+        roles = set(request.user.get('roles', []))
+        return 'admin' in roles
 
 class IsBankAgent(BasePermission):
     """

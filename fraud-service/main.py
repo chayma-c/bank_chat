@@ -149,7 +149,10 @@ class FraudRequest(BaseModel):
 
 
 @app.post("/analyze")
-async def analyze(req: FraudRequest):
+async def analyze(
+    req: FraudRequest,
+    _user: dict = Depends(require_bank_agent)
+):
     iban = req.iban or extract_iban_from_text(req.message)
     if req.message:
         user_content = req.message
@@ -187,7 +190,10 @@ async def analyze(req: FraudRequest):
 
 
 @app.get("/reports/{filename}")
-async def download_report(filename: str):
+async def download_report(
+    filename: str,
+    _user: dict = Depends(require_bank_agent)
+):
     if ".." in filename or "/" in filename or "\\" in filename:
         raise HTTPException(status_code=400, detail="Nom de fichier invalide.")
     filepath = _reports_dir() / filename
@@ -201,7 +207,7 @@ async def download_report(filename: str):
 
 
 @app.get("/reports")
-async def list_reports():
+async def list_reports(_user: dict = Depends(require_bank_agent)):
     reports_dir = _reports_dir()
     files = sorted(reports_dir.glob("*.xlsx"), key=lambda f: f.stat().st_mtime, reverse=True)
     base = os.getenv("FRAUD_SERVICE_PUBLIC_URL", "http://localhost:8001").rstrip("/")
@@ -221,11 +227,8 @@ async def list_reports():
 
 @app.get("/health")
 def health():
-    reports_dir = _reports_dir()
     return {
         "status":        "ok",
         "service":       "fraud-service",
         "version":       "2.0.0",
-        "reports_dir":   str(reports_dir),
-        "reports_count": len(list(reports_dir.glob("*.xlsx"))) if reports_dir.exists() else 0,
-    }
+    }

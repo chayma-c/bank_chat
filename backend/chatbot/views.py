@@ -3,6 +3,7 @@ import uuid
 import logging
 import httpx
 import os
+import jwt
 from django.http import StreamingHttpResponse
 from django.views import View
 from django.views.decorators.csrf import csrf_exempt
@@ -54,33 +55,24 @@ def _get_realm_roles(request) -> frozenset:
             options={"verify_exp": True},
         )
         return frozenset(payload.get("realm_access", {}).get("roles", []))
-    except Exception:
+    except jwt.ExpiredSignatureError:
+        logger.warning("[_get_realm_roles] JWT token expired")
         return frozenset()
-
-
-# ── Helper : appel HTTP au fraud-service ─────────────────────────────────────
-
-def call_fraud_service(iban: str, action: str, user_id: str,
-                       session_id: str, excel_path: str) -> dict:
-    response = httpx.post(
-        f"{FRAUD_SERVICE_URL}/analyze",
-        json={
-            "iban":       iban,
-            "action":     action,
-            "user_id":    user_id,
-            "session_id": session_id,
-            "excel_path": excel_path,
-        },
-        timeout=120.0,
-    )
-    response.raise_for_status()
-    return response.json()
+    except jwt.InvalidTokenError as e:
+        logger.warning("[_get_realm_roles] Invalid JWT token: %s", e)
+        return frozenset()
+    except Exception as e:
+        logger.exception("[_get_realm_roles] Unexpected error during role extraction: %s", e)
+        return frozenset()
 
 
 # ── Vues ──────────────────────────────────────────────────────────────────────
 
 class ChatView(APIView):
     """Mode non-streaming — passe par le graph LangGraph complet (mail_agent inclus)."""
+    authentication_classes = [KeycloakAuthentication]
+    permission_classes     = [IsAuthenticated]
+
     def post(self, request):
         data           = request.data
         user_id        = data.get("user_id", "anonymous")
@@ -110,10 +102,14 @@ class ChatView(APIView):
 
         conversation_messages = memory_manager.build_context(conversation, message)
 
+        auth_header = request.headers.get("Authorization")
+        auth_token = auth_header.split(" ")[1] if auth_header and "Bearer " in auth_header else None
+
         initial_state = {
             "messages":       conversation_messages,
             "user_id":        user_id,
             "session_id":     session_id,
+            "auth_token":     auth_token,
             "intent":         "",
             "agent":          "",
             "selected_agent": selected_agent,
@@ -141,8 +137,13 @@ class ChatView(APIView):
 
 
 class ConversationListView(APIView):
+    authentication_classes = [KeycloakAuthentication]
+    permission_classes     = [IsAuthenticated]
+
     def get(self, request):
-        user_id = request.query_params.get("user_id")
+        # By default, only show conversations for the authenticated user
+        user_id = request.query_params.get("user_id") or request.user.get("user_id")
+        
         qs = Conversation.objects.all()
         if user_id:
             qs = qs.filter(user_id=user_id)
@@ -150,6 +151,9 @@ class ConversationListView(APIView):
 
 
 class ConversationDetailView(APIView):
+    authentication_classes = [KeycloakAuthentication]
+    permission_classes     = [IsAuthenticated]
+
     def get(self, request, session_id):
         try:
             conv = Conversation.objects.get(session_id=session_id)
@@ -223,10 +227,14 @@ class StreamChatView(View):
 
         conversation_messages = memory_manager.build_context(conversation, message)
 
+        auth_header = request.headers.get("Authorization")
+        auth_token = auth_header.split(" ")[1] if auth_header and "Bearer " in auth_header else None
+
         initial_state: BankChatState = {
             "messages":       conversation_messages,
             "user_id":        user_id,
             "session_id":     session_id,
+            "auth_token":     auth_token,
             "intent":         "",
             "agent":          "",
             "selected_agent": selected_agent,
@@ -241,11 +249,10 @@ class StreamChatView(View):
         def generate():
             full_response = ""
             agent_used    = "fallback"
-            # fraud_result sera rempli si path ANALYZE — pour déclencher mail_agent ensuite
             fraud_result  = None
 
             try:
-                for token, agent_key, *extra in stream_agent_response(intent, intent_state["messages"]):
+                for token, agent_key, *extra in stream_agent_response(intent, intent_state):
                     full_response += token
                     agent_used     = agent_key
                     yield f'data: {json.dumps({"token": token, "agent": agent_key})}\n\n'
