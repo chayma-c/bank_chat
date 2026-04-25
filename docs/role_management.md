@@ -18,3 +18,14 @@ BankChat uses **Keycloak** as the Identity and Access Management (IAM) provider.
 ## 4. Service-to-Service Security
 - **JWT Forwarding**: Microservices (like `fraud-service`) require a valid `bank_agent` token in the `Authorization` header.
 - **FastAPI Dependency**: `require_bank_agent` validates the signature and roles for every request.
+
+## 5. In-App User Management
+The system now includes a dedicated **User Security** dashboard accessible only to `admin` users.
+
+- **Frontend Route**: `/admin/users`
+- **Features**:
+    - **User Listing**: Real-time synchronization with Keycloak identity store.
+    - **Role Toggles**: One-click assignment/revocation of `bank_agent` and `admin` roles.
+- **Backend Architecture**:
+    - **Proxy Layer**: Django views acting as a secure proxy to the Keycloak Admin API.
+    - **Admin Token**: The backend automatically manages a high-privilege master token to perform realm modifications on behalf of the UI admin.

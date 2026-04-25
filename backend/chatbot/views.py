@@ -19,7 +19,8 @@ from .models import Conversation, Message
 from .serializers import ConversationSerializer, MessageSerializer
 from .memory_manager import MemoryManager
 from .auth.authentication import KeycloakAuthentication
-from .auth.permissions import IsAuthenticated, IsBankAgent
+from .auth.permissions import IsAuthenticated, IsBankAgent, IsAdmin
+from .auth.keycloak_client import list_realm_users, get_user_role_mappings, update_user_role
 from django.conf import settings
 
 logger = logging.getLogger(__name__)
@@ -287,8 +288,8 @@ class StreamChatView(View):
                 yield f'data: {json.dumps({"error": str(e)})}\n\n'
 
         response = StreamingHttpResponse(generate(), content_type='text/event-stream')
-        response['Cache-Control']              = 'no-cache'
-        response['X-Accel-Buffering']          = 'no'
+        response['Cache-Control']               = 'no-cache'
+        response['X-Accel-Buffering']           = 'no'
         response['Access-Control-Allow-Origin'] = 'http://localhost:4200'
         return response
 
@@ -320,11 +321,24 @@ class FraudAnalyzeView(APIView):
             )
 
         try:
-            result = call_fraud_service(
-                iban=iban, action=action, user_id=user_id,
-                session_id=session_id, excel_path=excel_path,
+            # Note: call_fraud_service logic should ideally be here or in a shared helper.
+            # Assuming nodes.py _get_fraud_decision_and_result can be adapted or this uses direct httpx
+            # For simplicity, keeping the logic direct here if it was removed from helpers
+            headers = {"Authorization": request.headers.get("Authorization")}
+            resp = httpx.post(
+                f"{FRAUD_SERVICE_URL}/analyze",
+                json={
+                    "iban":       iban,
+                    "action":     action,
+                    "user_id":    user_id,
+                    "session_id": session_id,
+                    "excel_path": excel_path,
+                },
+                headers=headers,
+                timeout=120.0
             )
-            return Response(result)
+            resp.raise_for_status()
+            return Response(resp.json())
 
         except httpx.TimeoutException:
             return Response(
@@ -339,3 +353,45 @@ class FraudAnalyzeView(APIView):
         except Exception as e:
             logger.exception("FraudAnalyzeView error")
             return Response({"error": str(e)}, status=500)
+
+
+# ── User Management (Admin Only) ──────────────────────────────────────────────
+
+class UserListView(APIView):
+    authentication_classes = [KeycloakAuthentication]
+    permission_classes     = [IsAdmin]
+
+    def get(self, request):
+        try:
+            users = list_realm_users()
+            enriched_users = []
+            for u in users:
+                roles = get_user_role_mappings(u["id"])
+                u["roles"] = [r["name"] for r in roles]
+                enriched_users.append(u)
+            return Response(enriched_users)
+        except Exception as e:
+            logger.exception("UserListView error")
+            return Response({"error": str(e)}, status=503)
+
+class UserRoleUpdateView(APIView):
+    authentication_classes = [KeycloakAuthentication]
+    permission_classes     = [IsAdmin]
+
+    def post(self, request):
+        user_id   = request.data.get("user_id")
+        role_name = request.data.get("role")
+        action    = request.data.get("action", "add") # 'add' or 'remove'
+        
+        if not all([user_id, role_name]):
+            return Response({"error": "user_id and role are required"}, status=400)
+        
+        if role_name not in ["bank_agent", "admin"]:
+             return Response({"error": "Only 'bank_agent' and 'admin' roles can be managed."}, status=400)
+
+        try:
+            update_user_role(user_id, role_name, action)
+            return Response({"status": "success", "message": f"Role {role_name} {action}ed successfully."})
+        except Exception as e:
+            logger.exception("UserRoleUpdateView error")
+            return Response({"error": str(e)}, status=503)

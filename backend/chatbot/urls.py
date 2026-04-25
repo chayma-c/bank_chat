@@ -16,6 +16,10 @@ urlpatterns = [
     # Health check
     path('health/', views.HealthCheckView.as_view(), name='health'),
 
+    # Admin / User Management
+    path('admin/users/list/',        views.UserListView.as_view(),       name='admin-user-list'),
+    path('admin/users/update-role/', views.UserRoleUpdateView.as_view(), name='admin-user-role-update'),
+
     # Auth / role management
     path('', include('chatbot.auth.urls')),
 ]
