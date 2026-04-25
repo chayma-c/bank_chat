@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
@@ -24,6 +24,7 @@ from fraud.graph        import run_fraud_agent
 import asyncio
 from fraud.db import init_db, get_settings, update_settings
 from fraud.scheduler import scheduler_loop, run_global_analysis_task
+from fraud.auth import require_bank_agent
 
 logger = logging.getLogger(__name__)
 
@@ -97,7 +98,10 @@ async def get_fraud_settings():
     }
 
 @app.post("/settings")
-async def save_fraud_settings(data: SettingsUpdate):
+async def save_fraud_settings(
+    data: SettingsUpdate,
+    _user: dict = Depends(require_bank_agent),
+):
     try:
         update_settings(data.frequency, data.time, data.dayOfWeek)
         return {"status": "success", "message": "Settings updated"}
@@ -105,7 +109,7 @@ async def save_fraud_settings(data: SettingsUpdate):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/trigger")
-async def trigger_fraud_analysis():
+async def trigger_fraud_analysis(_user: dict = Depends(require_bank_agent)):
     # background task
     asyncio.create_task(run_global_analysis_task())
     return {"status": "triggered", "message": "Global analysis started in background"}

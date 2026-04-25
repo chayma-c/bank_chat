@@ -50,11 +50,7 @@ class HasAllRoles(BasePermission):
     def has_permission(self, request, view):
         if not request.user or not isinstance(request.user, dict):
             return False
-        
         user_roles = set(request.user.get('roles', []))
-        print("USER:", request.user)
-        print("USER ROLES:", user_roles)
-        print("REQUIRED ROLES:", self.required_roles)
         return self.required_roles.issubset(user_roles)
 
 
@@ -105,6 +101,19 @@ class IsAdmin(BasePermission):
         }
 
         return bool(all_roles.intersection(allowed))
+
+class IsBankAgent(BasePermission):
+    """
+    Allows access to users with 'bank_agent' OR 'admin' realm role.
+    Admins inherit all bank_agent capabilities.
+    """
+
+    def has_permission(self, request, view):
+        if not request.user or not isinstance(request.user, dict):
+            return False
+        roles = set(request.user.get('roles', []))
+        return bool(roles & {'bank_agent', 'admin'})
+
 
 class IsModerator(BasePermission):
     """Allows access only to users with 'moderator' role."""

@@ -17,6 +17,9 @@ from .graph.state import BankChatState
 from .models import Conversation, Message
 from .serializers import ConversationSerializer, MessageSerializer
 from .memory_manager import MemoryManager
+from .auth.authentication import KeycloakAuthentication
+from .auth.permissions import IsAuthenticated, IsBankAgent
+from django.conf import settings
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +27,35 @@ FRAUD_SERVICE_URL = os.getenv("FRAUD_SERVICE_URL", "http://fraud-service:8001")
 
 # ── Singleton mémoire ─────────────────────────────────────────────────────────
 memory_manager = MemoryManager(llm=llm)
+
+# ── Constants for role-gated agents ───────────────────────────────────────────
+_RESTRICTED_AGENTS = frozenset({'fraud', 'sql'})
+_BANK_AGENT_ROLES  = frozenset({'bank_agent', 'admin'})
+
+
+def _get_realm_roles(request) -> frozenset:
+    """
+    Extract realm roles from the Bearer JWT for non-DRF views.
+    Returns an empty frozenset if the token is absent, malformed, or expired.
+    """
+    from .auth.keycloak_client import get_public_key
+    header = request.headers.get("Authorization", "")
+    if not header.startswith("Bearer "):
+        return frozenset()
+    token = header[7:]
+    try:
+        public_key = get_public_key()
+        payload = jwt.decode(
+            token,
+            public_key,
+            algorithms=["RS256"],
+            audience=settings.KEYCLOAK_CLIENT_ID,
+            issuer=f"{settings.KEYCLOAK_ISSUER}/realms/{settings.KEYCLOAK_REALM}",
+            options={"verify_exp": True},
+        )
+        return frozenset(payload.get("realm_access", {}).get("roles", []))
+    except Exception:
+        return frozenset()
 
 
 # ── Helper : appel HTTP au fraud-service ─────────────────────────────────────
@@ -55,6 +87,18 @@ class ChatView(APIView):
         session_id     = data.get("session_id", str(uuid.uuid4()))
         message        = data.get("message")
         selected_agent = data.get("selected_agent", None)
+
+        # ── Role check: fraud & SQL agents require bank_agent or admin ──────
+        if selected_agent in _RESTRICTED_AGENTS:
+            user_roles = (
+                set(request.user.get('roles', []))
+                if isinstance(request.user, dict) else set()
+            )
+            if not (user_roles & _BANK_AGENT_ROLES):
+                return Response(
+                    {"error": "Accès refusé : rôle bank_agent ou admin requis pour cet agent."},
+                    status=403,
+                )
 
         if not message:
             return Response({"error": "message requis"}, status=400)
@@ -156,6 +200,16 @@ class StreamChatView(View):
         message        = data.get("message", "").strip()
         selected_agent = data.get("selected_agent", None)
 
+        # ── Role check: fraud & SQL agents require bank_agent or admin ──────
+        if selected_agent in _RESTRICTED_AGENTS:
+            user_roles = _get_realm_roles(request)
+            if not (user_roles & _BANK_AGENT_ROLES):
+                def _forbidden():
+                    yield f'data: {json.dumps({"error": "Accès refusé : rôle bank_agent ou admin requis pour cet agent."})}\n\n'
+                return StreamingHttpResponse(
+                    _forbidden(), content_type='text/event-stream', status=403
+                )
+
         if not message:
             return StreamingHttpResponse(
                 iter([f'data: {json.dumps({"error": "message requis"})}\n\n']),
@@ -241,6 +295,8 @@ class StreamChatView(View):
 
 class FraudAnalyzeView(APIView):
     """Direct fraud analysis endpoint — délègue au fraud-service via HTTP."""
+    authentication_classes = [KeycloakAuthentication]
+    permission_classes     = [IsAuthenticated, IsBankAgent]
 
     def post(self, request):
         data       = request.data

@@ -1,5 +1,6 @@
 import { Routes } from '@angular/router';
-import { authGuard } from './auth/auth.guard'; // your existing guard
+import { authGuard }      from './auth/auth.guard';
+import { bankAgentGuard, adminGuard } from './auth/role.guard';
 
 export const routes: Routes = [
   {
@@ -7,22 +8,33 @@ export const routes: Routes = [
     redirectTo: 'chat',
     pathMatch: 'full',
   },
+
+  // ── Chat — all authenticated users ──────────────────────────────────────
   {
     path: 'chat',
     loadComponent: () =>
       import('./chat/chat.component').then(m => m.ChatComponent),
     canActivate: [authGuard],
   },
+
+  // ── Fraud Settings — bank_agent and admin only ───────────────────────────
+  {
+    path: 'fraud-settings',
+    loadComponent: () =>
+      import('./fraud-settings/fraud-settings.component').then(m => m.FraudSettingsComponent),
+    canActivate: [authGuard, bankAgentGuard],
+  },
+
+  // ── Admin panel — admin only ─────────────────────────────────────────────
   {
     path: 'admin',
-    canActivate: [authGuard],
+    canActivate: [authGuard, adminGuard],
     children: [
       {
         path: 'fraud-rules',
         loadComponent: () =>
           import('./fraud-admin/fraud-admin.component').then(m => m.FraudAdminComponent),
       },
-      // Placeholder routes for sidebar links — add components as needed
       {
         path: 'decision-logs',
         loadComponent: () =>
@@ -40,12 +52,14 @@ export const routes: Routes = [
       },
     ],
   },
+
+  // ── Access denied ────────────────────────────────────────────────────────
   {
-    path: 'fraud-settings',
+    path: 'unauthorized',
     loadComponent: () =>
-      import('./fraud-settings/fraud-settings.component').then(m => m.FraudSettingsComponent),
-    canActivate: [authGuard],
+      import('./shared/unauthorized/unauthorized.component').then(m => m.UnauthorizedComponent),
   },
+
   {
     path: '**',
     redirectTo: 'chat',

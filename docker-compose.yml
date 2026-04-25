@@ -122,6 +122,7 @@ services:
       FRAUD_SERVICE_PUBLIC_URL: "http://localhost/fraud"
       DATABASE_URL: postgresql://sql_user:sql_password@db:5432/banking_data
       CORS_ORIGINS: "http://localhost:4200,http://localhost,http://localhost:80"
+      KEYCLOAK_ISSUER: "http://localhost/auth"
     ports:
       - "8001:8001"
     extra_hosts:
