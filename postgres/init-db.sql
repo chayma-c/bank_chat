@@ -217,6 +217,57 @@ FROM pg_database
 WHERE datname IN ('bank_orchestrateur', 'keycloak_db', 'banking_data')
 ORDER BY datname;
 
+
+-- ══════════════════════════════════════════════════════════════════════════
+-- DATABASE 4: mail_db
+-- Service: Mail Service
+-- Purpose: Traçabilité de tous les emails envoyés
+-- ══════════════════════════════════════════════════════════════════════════
+
+\connect postgres
+
+CREATE DATABASE mail_db
+    WITH
+    ENCODING = 'UTF8'
+    LC_COLLATE = 'C'
+    LC_CTYPE = 'C'
+    TEMPLATE = template0;
+
+CREATE USER mail_user WITH PASSWORD 'mail_password';
+ALTER DATABASE mail_db OWNER TO mail_user;
+GRANT ALL PRIVILEGES ON DATABASE mail_db TO mail_user;
+
+\connect mail_db
+
+GRANT ALL ON SCHEMA public TO mail_user;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO mail_user;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO mail_user;
+
+CREATE TABLE IF NOT EXISTS sent_emails (
+    id             UUID          PRIMARY KEY DEFAULT gen_random_uuid(),
+    sent_at        TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+    recipient      VARCHAR(255)  NOT NULL,
+    cc             VARCHAR(255),
+    subject        VARCHAR(512)  NOT NULL,
+    template_type  VARCHAR(64)   NOT NULL,   -- fraud_alert | critical_alert | client_response | nightly_report
+    iban           VARCHAR(64),              -- IBAN concerné (null si non applicable)
+    score_final    INTEGER,                  -- score fraude (null si non applicable)
+    risk_level     VARCHAR(32),              -- APPROVED | REVIEW | HOLD | BLOCK
+    tracfin        BOOLEAN       DEFAULT FALSE,
+    has_attachment BOOLEAN       DEFAULT FALSE,
+    status         VARCHAR(16)   NOT NULL DEFAULT 'sent',  -- sent | failed
+    error_detail   TEXT,                     -- message d'erreur si status=failed
+    session_id     VARCHAR(128),             -- session de conversation source
+    user_id        VARCHAR(128)              -- utilisateur qui a déclenché
+);
+
+CREATE INDEX idx_sent_emails_sent_at       ON sent_emails(sent_at DESC);
+CREATE INDEX idx_sent_emails_template_type ON sent_emails(template_type);
+CREATE INDEX idx_sent_emails_iban          ON sent_emails(iban);
+CREATE INDEX idx_sent_emails_status        ON sent_emails(status);
+
+\echo '✅ mail_db created successfully'
+
 \echo ''
 \echo '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'
 \echo '✅ Database initialization completed successfully!'

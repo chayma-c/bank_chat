@@ -122,6 +122,7 @@ services:
       FRAUD_SERVICE_PUBLIC_URL: "http://localhost/fraud"
       DATABASE_URL: postgresql://sql_user:sql_password@db:5432/banking_data
       CORS_ORIGINS: "http://localhost:4200,http://localhost,http://localhost:80"
+      KEYCLOAK_ISSUER: "http://localhost/auth"
     ports:
       - "8001:8001"
     extra_hosts:
@@ -164,7 +165,8 @@ services:
       DJANGO_SETTINGS_MODULE: config.settings
       DEBUG: "True"
       KEYCLOAK_ISSUER: "http://localhost/auth"   # ← ADD — matches KC_HOSTNAME_URL
-
+      MAIL_SERVICE_URL: http://mail-service:8002
+      ALERT_EMAIL: compliance@yourbank.com
     ports:
       - "8000:8000"
     depends_on:
@@ -175,6 +177,8 @@ services:
       keycloak:
         condition: service_started  # ← Changé de service_healthy à service_started
       fraud-service:
+        condition: service_healthy
+      mail-service:
         condition: service_healthy
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -251,6 +255,33 @@ services:
     depends_on:
       api-gateway:
         condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - bank_network
+
+# ══════════════════════════════════════════════════════════════════════
+# 📧 MAIL SERVICE
+# ══════════════════════════════════════════════════════════════════════
+  mail-service:
+    build:
+      context: ./mail-service
+      dockerfile: Dockerfile
+    container_name: bank_chat_mail
+    env_file:
+      - .env
+    environment:
+      MAIL_DATABASE_URL: postgresql://mail_user:mail_password@db:5432/mail_db
+    ports:
+      - "8002:8002"
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:8002/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
     restart: unless-stopped
     networks:
       - bank_network

@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html>
+<body style="font-family: Arial, sans-serif; max-width: 600px; margin: auto;">
+  <div style="background: #fee2e2; padding: 16px; border-radius: 8px;">
+    <h2 style="color: #991b1b;">⚠️ Alerte Fraude — {{ risk_level }}</h2>
+  </div>
+  <div style="padding: 20px;">
+    <p><strong>IBAN :</strong> {{ iban }}</p>
+    <p><strong>Score final :</strong> {{ score_final }}/100</p>
+    <p><strong>Niveau de risque :</strong> {{ risk_level }}</p>
+    <p><strong>TRACFIN requis :</strong> {{ "OUI ⚠️" if tracfin_required else "NON" }}</p>
+    <hr/>
+    <p>{{ llm_summary }}</p>
+    {% if download_url %}
+    <p><a href="{{ download_url }}" style="background:#1d4ed8; color:white; padding:10px 20px; border-radius:6px; text-decoration:none;">
+      Télécharger le rapport Excel
+    </a></p>
+    {% endif %}
+  </div>
+</body>
+</html>

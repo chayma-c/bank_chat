@@ -6,6 +6,7 @@ class BankChatState(TypedDict):
     messages:       Annotated[List[BaseMessage], operator.add]
     user_id:        str
     session_id:     str
+    auth_token:     str | None # Forwarded JWT for service-to-service auth
     intent:         str        # "account", "transfer", "support", "fraud", ...
     agent:          str
     selected_agent: str | None # Manually selected agent from UI
