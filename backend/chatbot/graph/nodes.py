@@ -57,9 +57,9 @@ BASE_RESPONSE_POLICY = (
     "- Match answer length to the complexity of the user's request. "
     "- Use the minimum words necessary to fully answer. "
     "- Start with a direct answer first. "
-    "- Prefer 1–3 sentences for simple questions. "
+    "- Prefer 1–5 sentences for simple questions. "
     "- Use bullets for multi-step explanations. "
-    "- Keep responses under 120 words unless requested otherwise.\n"
+    "- Keep responses under 350 words unless requested otherwise.\n"
     "Response Layout Rules: "
     "- Short paragraphs, headings for long answers, bullets for lists. "
     "- Prioritize readability and scanability."
@@ -185,6 +185,16 @@ def stream_agent_response(intent: str, state: BankChatState):
         except Exception as e:
             yield f"❌ Error: {e}", "fraud_agent"
             return
+    elif intent == "text_to_sql":
+        try:
+            result = text_to_sql_agent(state)
+            # text_to_sql_agent returns messages as a list of AIMessages
+            content = result["messages"][0].content
+            yield content, "text2sql_agent"
+            return
+        except Exception as e:
+            yield f"❌ Error service SQL : {e}", "text2sql_agent"
+            return
     else:
         agent_key = {"account": "account_agent", "transfer": "transfer_agent", "support": "support_agent"}.get(intent, "fallback")
     
@@ -212,4 +222,36 @@ def _run_agent(state: BankChatState, agent_key: str) -> BankChatState:
 def account_agent(state: BankChatState):   return _run_agent(state, "account_agent")
 def transfer_agent(state: BankChatState):  return _run_agent(state, "transfer_agent")
 def support_agent(state: BankChatState):   return _run_agent(state, "support_agent")
+
 def handle_fallback(state: BankChatState): return _run_agent(state, "fallback")
+
+def text_to_sql_agent(state: BankChatState) -> dict:
+    """Text-to-SQL agent node — delegates to the text-to-sql-service microservice."""
+    last_user_msg = ""
+    for msg in reversed(state["messages"]):
+        if hasattr(msg, "type") and msg.type == "human":
+            last_user_msg = msg.content
+            break
+        if msg.__class__.__name__ == "HumanMessage":
+            last_user_msg = msg.content
+            break
+
+    try:
+        response = httpx.post(
+            f"{os.getenv('TEXT2SQL_SERVICE_URL', 'http://text-to-sql-service:8003')}/query",
+            json={"question": last_user_msg, "user_id": state.get("user_id", "anonymous")},
+            timeout=60.0,
+        )
+        response.raise_for_status()
+        result = response.json()
+        return {
+            "messages": [AIMessage(content=result.get("explanation", "Query executed."))],
+            "agent": "text2sql_agent",
+        }
+    except Exception as e:
+        logger.exception("[text_to_sql_agent] Error")
+        return {
+            "messages": [AIMessage(content=f"❌ Erreur service SQL : {str(e)}")],
+            "agent": "text2sql_agent",
+            "error": str(e),
+        }

@@ -180,7 +180,7 @@ export class ChatComponent implements OnInit, AfterViewChecked {
       user_id: this.userId,
       session_id: this.sessionId(),
       message: text,
-      agent: agent
+      selected_agent: agent
     }).subscribe({
       next: (evt) => {
         if (evt.error) {
