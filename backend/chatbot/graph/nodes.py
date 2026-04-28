@@ -448,6 +448,29 @@ def mail_agent(state: BankChatState) -> BankChatState:
     else:
         logger.error(f"[mail_agent] ❌ Email FAILED: {result.get('detail')}")
 
+    # ── Mettre à jour le decision log avec les infos mail ─────────────────
+    decision_log_id = context.get("decision_log_id", "") or state.get("decision_log_id", "")
+    logger.info(f"[mail_agent] decision_log_id={decision_log_id!r}")
+
+    if decision_log_id:
+        try:
+            patch_resp = httpx.patch(
+                f"{FRAUD_SERVICE_URL}/decision-logs/{decision_log_id}/mail",
+                json={
+                    "mail_sent":      status == "sent",
+                    "mail_recipient": ALERT_EMAIL,
+                    "mail_template":  template,
+                    "mail_status":    status,
+                    "mail_id":        result.get("id"),
+                },
+                timeout=5.0,
+            )
+            patch_resp.raise_for_status()
+            logger.info(f"[mail_agent] ✅ Decision log {decision_log_id} updated with mail info")
+        except Exception as e:
+            logger.warning(f"[mail_agent] Could not update decision log mail info: {e}")
+    else:
+        logger.warning("[mail_agent] No decision_log_id — mail info not persisted to DB")
     updated_context = {
         **context,
         "mail_results": [{"to": ALERT_EMAIL, "subject": subject, "status": status}]
@@ -463,7 +486,7 @@ def mail_agent(state: BankChatState) -> BankChatState:
 
 
 
-def stream_agent_response(intent: str, messages: list):
+def stream_agent_response(intent: str, messages: list, user_id: str = "anonymous", session_id: str = ""):
     """
     Yields (token, agent_key) tuples — ou (token, agent_key, fraud_result) pour fraud ANALYZE.
 
@@ -511,8 +534,8 @@ def stream_agent_response(intent: str, messages: list):
                         "message":    last_msg,
                         "iban":       iban,
                         "action":     "fraud_check",
-                        "user_id":    "anonymous",
-                        "session_id": "",
+                        "user_id":    user_id,
+                        "session_id": session_id,
                         "excel_path": "",
                     },
                     timeout=120.0,

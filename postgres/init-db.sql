@@ -177,6 +177,41 @@ CREATE TABLE IF NOT EXISTS fraud_rules (
     created_at     TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
     updated_at     TIMESTAMPTZ   NOT NULL DEFAULT NOW()
 );
+-- Ajouter dans la section banking_data, après la table fraud_rules
+
+CREATE TABLE IF NOT EXISTS fraud_decision_logs (
+    id                     VARCHAR(64)   PRIMARY KEY,
+    created_at             TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+    user_id                VARCHAR(128),
+    session_id             VARCHAR(128),
+    iban                   VARCHAR(64)   NOT NULL,
+    transactions_count     INTEGER       DEFAULT 0,
+    date_range             VARCHAR(64),
+    score_behavioral       INTEGER       DEFAULT 0,
+    score_aml              INTEGER       DEFAULT 0,
+    score_final            INTEGER       DEFAULT 0,
+    risk_level             VARCHAR(32),
+    tracfin_required       BOOLEAN       NOT NULL DEFAULT FALSE,
+    rules_triggered        INTEGER       DEFAULT 0,
+    rules_evaluated        INTEGER       DEFAULT 0,
+    triggered_rules_detail JSONB,
+    report_path            VARCHAR(512),
+    download_url           VARCHAR(512),
+    mail_sent              BOOLEAN       NOT NULL DEFAULT FALSE,
+    mail_recipient         VARCHAR(255),
+    mail_template          VARCHAR(64),
+    mail_status            VARCHAR(16),
+    mail_id                VARCHAR(64),
+    llm_summary            TEXT,
+    error                  TEXT
+);
+
+CREATE INDEX idx_decision_logs_created_at ON fraud_decision_logs(created_at DESC);
+CREATE INDEX idx_decision_logs_iban       ON fraud_decision_logs(iban);
+CREATE INDEX idx_decision_logs_risk_level ON fraud_decision_logs(risk_level);
+CREATE INDEX idx_decision_logs_user_id    ON fraud_decision_logs(user_id);
+
+\echo '✅ fraud_decision_logs table created'
 
 -- Auto-update updated_at on every UPDATE
 CREATE OR REPLACE FUNCTION update_updated_at()
@@ -195,6 +230,7 @@ CREATE INDEX idx_fraud_rules_domain ON fraud_rules(domain);
 CREATE INDEX idx_fraud_rules_active ON fraud_rules(active);
 
 \echo '✅ banking_data created successfully'
+
 
 -- ══════════════════════════════════════════════════════════════════════════
 -- VERIFICATION
