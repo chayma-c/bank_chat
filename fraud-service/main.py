@@ -9,23 +9,22 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from langchain_core.messages import HumanMessage
 
 from fraud.database     import SessionLocal, Base, engine
-from fraud.models       import FraudRuleModel,FraudDecisionLog        # noqa: F401
+from fraud.models       import FraudRuleModel        # noqa: F401
 from fraud.crud         import seed_default_rules
 from fraud.rule_router import router as rule_router
 from fraud.graph        import run_fraud_agent
-from sqlalchemy import desc
 
-from typing import Optional
 import asyncio
 from fraud.db import init_db, get_settings, update_settings
 from fraud.scheduler import scheduler_loop, run_global_analysis_task
+from fraud.auth import require_bank_agent
 
 logger = logging.getLogger(__name__)
 
@@ -85,7 +84,7 @@ class SettingsUpdate(BaseModel):
     dayOfWeek: int
 
 @app.get("/settings")
-async def get_fraud_settings():
+async def get_fraud_settings(_user: dict = Depends(require_bank_agent),):
     s = get_settings()
     if not s:
         return {"frequency": "manual", "time": "02:00", "dayOfWeek": 1}
@@ -99,7 +98,10 @@ async def get_fraud_settings():
     }
 
 @app.post("/settings")
-async def save_fraud_settings(data: SettingsUpdate):
+async def save_fraud_settings(
+    data: SettingsUpdate,
+    _user: dict = Depends(require_bank_agent),
+    ):
     try:
         update_settings(data.frequency, data.time, data.dayOfWeek)
         return {"status": "success", "message": "Settings updated"}
@@ -107,7 +109,7 @@ async def save_fraud_settings(data: SettingsUpdate):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/trigger")
-async def trigger_fraud_analysis():
+async def trigger_fraud_analysis(_user: dict = Depends(require_bank_agent)):
     # background task
     asyncio.create_task(run_global_analysis_task())
     return {"status": "triggered", "message": "Global analysis started in background"}
@@ -155,7 +157,10 @@ class MailUpdatePayload(BaseModel):
  
  
 @app.post("/analyze")
-async def analyze(req: FraudRequest):
+async def analyze(
+    req: FraudRequest,
+    _user: dict = Depends(require_bank_agent)
+    ):
     iban = req.iban or extract_iban_from_text(req.message)
     if req.message:
         user_content = req.message

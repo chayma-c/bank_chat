@@ -7,6 +7,7 @@ from .nodes import (
     detect_intent, route_to_agent,
     account_agent, transfer_agent, support_agent,
     fraud_agent, handle_fallback, mail_agent,
+    text_to_sql_agent,
 )
 from langchain_core.messages import AIMessage
 
@@ -17,36 +18,6 @@ MAIL_SERVICE_URL  = os.getenv("MAIL_SERVICE_URL",  "http://mail-service:8002")
 ALERT_EMAIL       = os.getenv("ALERT_EMAIL",        "compliance@yourbank.com")
 
 
-def text_to_sql_agent(state: BankChatState) -> dict:
-    """Text-to-SQL agent node — delegates to the text-to-sql-service microservice."""
-    last_user_msg = ""
-    for msg in reversed(state["messages"]):
-        if hasattr(msg, "type") and msg.type == "human":
-            last_user_msg = msg.content
-            break
-        if msg.__class__.__name__ == "HumanMessage":
-            last_user_msg = msg.content
-            break
-
-    try:
-        response = httpx.post(
-            f"{os.getenv('TEXT2SQL_SERVICE_URL', 'http://text-to-sql-service:8003')}/query",
-            json={"question": last_user_msg, "user_id": state.get("user_id", "anonymous")},
-            timeout=60.0,
-        )
-        response.raise_for_status()
-        result = response.json()
-        return {
-            "messages": [AIMessage(content=result.get("explanation", "Query executed."))],
-            "agent": "text2sql_agent",
-        }
-    except Exception as e:
-        logger.exception("[text_to_sql_agent] Error")
-        return {
-            "messages": [AIMessage(content=f"❌ Erreur service SQL : {str(e)}")],
-            "agent": "text2sql_agent",
-            "error": str(e),
-        }
 
 
 def should_send_mail(state: BankChatState) -> str:

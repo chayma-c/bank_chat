@@ -59,12 +59,30 @@ export class KeycloakService {
   }
 
   get isAdmin(): boolean {
-    // Check if the user has the 'admin' role either globally (realm role)
-    // or specifically for this application client (resource/client role).
-    const isAdm = KeycloakService.kc.hasRealmRole('admin') || KeycloakService.kc.hasResourceRole('admin');
-    console.log('DEBUG: Kc parsed token:', KeycloakService.kc.tokenParsed);
-    console.log('DEBUG: Evaluated isAdmin:', isAdm);
-    return isAdm;
+    return (
+      KeycloakService.kc.hasRealmRole('admin') ||
+      KeycloakService.kc.hasResourceRole('admin')
+    );
+  }
+
+  /**
+   * True for bank_agent AND admin (admin inherits all bank_agent capabilities).
+   * Use this to gate fraud-agent access, fraud-settings page, etc.
+   */
+  get isBankAgent(): boolean {
+    return (
+      KeycloakService.kc.hasRealmRole('bank_agent') ||
+      KeycloakService.kc.hasRealmRole('admin') ||
+      KeycloakService.kc.hasResourceRole('bank_agent') ||
+      KeycloakService.kc.hasResourceRole('admin')
+    );
+  }
+
+  /** All realm-level roles from the token (for debugging / audit). */
+  get roles(): string[] {
+    return (
+      (KeycloakService.kc.tokenParsed as any)?.['realm_access']?.['roles'] ?? []
+    );
   }
 
   logout(): void {

@@ -7,7 +7,6 @@ from django.conf import settings
 
 _public_key_cache: str | None = None
 
-
 def get_public_key() -> str:
     """Return the PEM-formatted RSA public key for the configured realm."""
     global _public_key_cache
@@ -22,25 +21,13 @@ def get_public_key() -> str:
     _public_key_cache = f"-----BEGIN PUBLIC KEY-----\n{raw}\n-----END PUBLIC KEY-----"
     return _public_key_cache
 
-
 def clear_cache() -> None:
     """Reset the cached key (useful for tests or key rotation)."""
     global _public_key_cache
     _public_key_cache = None
 
-
 def get_admin_token() -> str:
-    """
-    Obtain a short-lived admin token from Keycloak using the admin credentials
-    stored in settings.
-
-    Uses KEYCLOAK_ADMIN_REALM (default: 'master') because admin-cli is a
-    built-in client of Keycloak's master realm, not the application realm.
-
-    Raises ValueError with a human-readable message on failure so callers
-    can return a proper 503 instead of letting a raw exception cause a 500.
-    """
-    # admin-cli lives in the master realm, not in the application realm.
+    """Obtain a short-lived admin token from Keycloak."""
     admin_realm = getattr(settings, "KEYCLOAK_ADMIN_REALM", "master")
     admin_client_id = getattr(settings, "KEYCLOAK_ADMIN_CLIENT_ID", "admin-cli")
 
@@ -60,7 +47,50 @@ def get_admin_token() -> str:
         resp.raise_for_status()
         return resp.json()["access_token"]
     except requests.exceptions.RequestException as exc:
-        raise ValueError(
-            f"Failed to obtain Keycloak admin token "
-            f"(realm={admin_realm}, client={admin_client_id}): {exc}"
-        ) from exc
+        raise ValueError(f"Failed to obtain Keycloak admin token: {exc}")
+
+# ── Admin API Helpers ─────────────────────────────────────────────────────────
+
+def list_realm_users() -> list:
+    """Fetch the list of all users in the application realm."""
+    token = get_admin_token()
+    url = f"{settings.KEYCLOAK_URL}/admin/realms/{settings.KEYCLOAK_REALM}/users"
+    headers = {"Authorization": f"Bearer {token}"}
+    
+    resp = requests.get(url, headers=headers, timeout=10)
+    resp.raise_for_status()
+    return resp.json()
+
+def get_user_role_mappings(user_id: str) -> list:
+    """Fetch realm-level role mappings for a specific user."""
+    token = get_admin_token()
+    url = f"{settings.KEYCLOAK_URL}/admin/realms/{settings.KEYCLOAK_REALM}/users/{user_id}/role-mappings/realm"
+    headers = {"Authorization": f"Bearer {token}"}
+    
+    resp = requests.get(url, headers=headers, timeout=10)
+    resp.raise_for_status()
+    return resp.json()
+
+def update_user_role(user_id: str, role_name: str, action: str = "add"):
+    """
+    Assign or remove a realm role from a user.
+    Action must be 'add' or 'remove'.
+    """
+    token = get_admin_token()
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    
+    # 1. Fetch the role object to get its ID (required by Keycloak for assignment)
+    role_url = f"{settings.KEYCLOAK_URL}/admin/realms/{settings.KEYCLOAK_REALM}/roles/{role_name}"
+    role_resp = requests.get(role_url, headers=headers, timeout=10)
+    role_resp.raise_for_status()
+    role_data = [role_resp.json()] # Payload must be a list of role objects
+
+    # 2. Apply the change
+    mapping_url = f"{settings.KEYCLOAK_URL}/admin/realms/{settings.KEYCLOAK_REALM}/users/{user_id}/role-mappings/realm"
+    if action == "add":
+        resp = requests.post(mapping_url, json=role_data, headers=headers, timeout=10)
+    else:
+        resp = requests.delete(mapping_url, json=role_data, headers=headers, timeout=10)
+    
+    resp.raise_for_status()
+    return True

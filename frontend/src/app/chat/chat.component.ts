@@ -44,6 +44,10 @@ export class ChatComponent implements OnInit, AfterViewChecked {
     return this.keycloak.isAdmin;
   }
 
+  get isBankAgent(): boolean {
+    return this.keycloak.isBankAgent;
+  }
+
   sessionId = signal<string>(uuidv4());
   messages = signal<LocalMessage[]>([]);
   userInput = signal<string>('');
@@ -176,7 +180,7 @@ export class ChatComponent implements OnInit, AfterViewChecked {
       user_id: this.userId,
       session_id: this.sessionId(),
       message: text,
-      agent: agent
+      selected_agent: agent
     }).subscribe({
       next: (evt) => {
         if (evt.error) {

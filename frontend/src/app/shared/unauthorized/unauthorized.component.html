@@ -1,0 +1,87 @@
+<!-- Unauthorized Access Page -->
+<div class="unauth-layout">
+
+  <!-- Animated background blobs -->
+  <div class="blob blob--1"></div>
+  <div class="blob blob--2"></div>
+  <div class="blob blob--3"></div>
+
+  <!-- Card -->
+  <div class="unauth-card">
+
+    <!-- Lock icon -->
+    <div class="unauth-icon-ring">
+      <svg class="unauth-icon" xmlns="http://www.w3.org/2000/svg" fill="none"
+           viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+        <path stroke-linecap="round" stroke-linejoin="round"
+              d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0
+                 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm
+                 10-10V7a4 4 0 00-8 0v4h8z" />
+      </svg>
+    </div>
+
+    <h1 class="unauth-title">Access Denied</h1>
+    <p class="unauth-sub">
+      Your account (<strong>{{ username }}</strong>) does not have the required
+      permissions to view this page.
+    </p>
+
+    <!-- User's current roles -->
+    <div class="unauth-roles">
+      <span class="roles-label">Your current role(s):</span>
+      @if (roles.length > 0) {
+        <div class="roles-list">
+          @for (role of roles; track role) {
+            @if (!role.startsWith('default-') && !role.startsWith('uma_') && !role.startsWith('offline')) {
+              <span class="role-chip">{{ role }}</span>
+            }
+          }
+        </div>
+      } @else {
+        <span class="role-chip role-chip--none">No roles assigned</span>
+      }
+    </div>
+
+    <!-- Role matrix hint -->
+    <div class="unauth-matrix">
+      <div class="matrix-row matrix-row--header">
+        <span>Feature</span><span>Required role</span>
+      </div>
+      <div class="matrix-row">
+        <span>💬 Chat</span><span class="chip chip--client">client</span>
+      </div>
+      <div class="matrix-row">
+        <span>🔍 Fraud Agent &amp; Settings</span>
+        <span class="chip chip--agent">bank_agent</span>
+      </div>
+      <div class="matrix-row">
+        <span>🛡️ Fraud Rule Admin</span>
+        <span class="chip chip--admin">admin</span>
+      </div>
+    </div>
+
+    <p class="unauth-hint">
+      Contact your system administrator to request the appropriate role.
+    </p>
+
+    <!-- Actions -->
+    <div class="unauth-actions">
+      <button class="btn btn--primary" (click)="goBack()">
+        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="none"
+             viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M10 19l-7-7m0 0l7-7m-7 7h18"/>
+        </svg>
+        Return to Chat
+      </button>
+      <button class="btn btn--ghost" (click)="logout()">
+        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="none"
+             viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round"
+                d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a2 2 0 01-2 2H6a2 2 0 01-2-2V7a2 2 0 012-2h5a2 2 0 012 2v1"/>
+        </svg>
+        Sign out
+      </button>
+    </div>
+
+  </div>
+</div>
