@@ -70,7 +70,13 @@ SYSTEM_PROMPTS = {
     "transfer_agent": "You are BankChat, a specialized assistant for money transfers." + BASE_RESPONSE_POLICY,
     "support_agent": "You are BankChat, a specialized customer support agent." + BASE_RESPONSE_POLICY,
     "fallback": "You are BankChat, a professional AI banking assistant." + BASE_RESPONSE_POLICY,
-    "fraud_agent": "You are BankChat, a specialized expert in banking security and fraud detection." + BASE_RESPONSE_POLICY,
+    "fraud_agent": (
+        "You are BankChat's Senior Compliance & Fraud Prevention Officer. "
+        "Your expertise includes AML (Anti-Money Laundering), KYC (Know Your Customer), and TRACFIN regulations. "
+        "You provide professional, secure, and measured advice. "
+        "If a user asks about suspicious activity or suspicious IBANs, you should encourage them  perform a formal analysis. "
+        "Maintain a high level of confidentiality and professionalism."
+    ) + BASE_RESPONSE_POLICY,
 }
 
 MAIL_AGENT_SYSTEM = """\
@@ -89,13 +95,22 @@ def _get_fraud_decision_and_result(messages: list, user_id: str, session_id: str
     last_msg = next((m.content for m in reversed(messages) if m.__class__.__name__ == "HumanMessage"), "")
     
     prompt = (
-        "Decide if we need to call ANALYZE or TALK.\n"
-        f"User: {last_msg}\n"
-        "Format: REASONING: <text>\nDECISION: <ANALYZE or TALK>"
+        "You are a Fraud Detection Orchestrator. "
+        "Decide if the user is asking for a deep technical analysis of transactions (ANALYZE) "
+        "or if they are asking a general question about fraud, security, or procedures (TALK).\n\n"
+        "EXAMPLES:\n"
+        "- 'Check this IBAN FR76...' -> ANALYZE\n"
+        "- 'Analyze the transactions for this account' -> ANALYZE\n"
+        "- 'What is phishing?' -> TALK\n"
+        "- 'How do I report a lost card?' -> TALK\n\n"
+        f"User Message: {last_msg}\n\n"
+        "Format your response exactly as follows:\n"
+        "REASONING: <brief explanation>\n"
+        "DECISION: <ANALYZE or TALK>"
     )
     
     resp = llm.invoke(prompt).content.upper()
-    reasoning = next((l.split(":", 1)[1].strip() for l in resp.split("\n") if "REASONING:" in l), "Processing...")
+    reasoning = next((l.split(":", 1)[1].strip() for l in resp.split("\n") if "REASONING:" in l), "Delegated to fraud specialist.")
     decision = "ANALYZE" if "ANALYZE" in resp else "TALK"
     
     prefix = f"💡 *{reasoning}*\n\n---\n\n"
@@ -125,11 +140,26 @@ def detect_intent(state: BankChatState) -> BankChatState:
         return {**state, "intent": "text_to_sql" if selected == "sql" else selected}
         
     last_msg = state["messages"][-1].content
-    prompt = f"Classify intent: account, transfer, support, fraud, fallback. Message: {last_msg}"
+    prompt = (
+        "Classify the banking user's intent based on the following categories:\n"
+        "- account: Balance inquiry, IBAN request, account status, RIB.\n"
+        "- transfer: Sending money, wire transfers, recurring payments, RIB management.\n"
+        "- support: Lost card, mobile app issues, password reset, generic help.\n"
+        "- fraud: Suspicious transactions, fraudulent emails, reporting scams, auditing an IBAN.\n"
+        "- fallback: Anything else, greetings, off-topic questions.\n\n"
+        "EXAMPLES:\n"
+        "'Quel est mon solde ?' -> account\n"
+        "'Je veux envoyer 100€ à Ali' -> transfer\n"
+        "'Ma carte est bloquée' -> support\n"
+        "'Cet IBAN est-il suspect ?' -> fraud\n"
+        "'Bonjour' -> fallback\n\n"
+        f"Message: {last_msg}\n"
+        "Classification (one word only):"
+    )
     intent = llm.invoke(prompt).content.strip().lower().split()[0]
     
     # Simple hardcoded overrides for reliability
-    if intent != "fraud" and any(k in last_msg.lower() for k in ["fraude", "iban", "tracfin"]):
+    if intent != "fraud" and any(k in last_msg.lower() for k in ["fraude", "iban", "tracfin", "louche", "suspect"]):
         intent = "fraud"
         
     return {**state, "intent": intent if intent in ("account", "transfer", "support", "fraud") else "fallback"}

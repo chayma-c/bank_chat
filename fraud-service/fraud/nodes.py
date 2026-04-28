@@ -10,6 +10,7 @@ Modification principale :
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
@@ -68,24 +69,49 @@ def _extract_iban(text: str) -> str:
 # ══════════════════════════════════════════════════════════════════════════════
 
 def parse_request(state: FraudAgentState) -> dict:
-    """Extrait l'IBAN et l'action depuis le dernier message utilisateur."""
+    """Extrait l'IBAN et l'action via LLM pour plus de robustesse."""
     last_msg = state["messages"][-1] if state["messages"] else None
     text = last_msg.content if last_msg else ""
 
-    iban = _extract_iban(text)
+    if not text:
+        return {"error": "Message vide."}
 
+    # ── Tentative d'extraction intelligente par LLM ───────────────────
+    extraction_prompt = f"""Tu es un extracteur d'entités bancaires expert.
+Extrais l'IBAN et l'intention (action) du message suivant.
+
+Message: "{text}"
+
+Règles :
+1. IBAN: Doit être un IBAN complet (ex: TN59...) ou un identifiant court (ex: IBAN_123). Si absent, renvoie "".
+2. Action: "export_transactions" si l'utilisateur veut télécharger, exporter ou obtenir un fichier Excel. Sinon "fraud_check".
+
+Réponds UNIQUEMENT au format JSON :
+{{"iban": "...", "action": "..."}}"""
+
+    iban = ""
     action = "fraud_check"
-    text_lower = text.lower()
-    if any(w in text_lower for w in ("export", "télécharge", "download", "exporter")):
-        action = "export_transactions"
+    try:
+        llm = _get_llm()
+        resp = llm.invoke([HumanMessage(content=extraction_prompt)])
+        import json
+        data = json.loads(re.search(r"\{.*\}", resp.content, re.DOTALL).group(0))
+        iban = data.get("iban", "").replace(" ", "").upper()
+        action = data.get("action", "fraud_check")
+    except Exception as exc:
+        logger.warning(f"[parse_request] LLM extraction failed: {exc}. Falling back to Regex.")
+        # Fallback Regex
+        iban = _extract_iban(text)
+        if any(w in text.lower() for w in ("export", "télécharge", "download", "exporter")):
+            action = "export_transactions"
 
-    logger.info(f"[parse_request] IBAN={iban!r}  action={action!r}")
+    logger.info(f"[parse_request] IBAN={iban!r} action={action!r}")
 
     if not iban:
         return {
             "iban":   "",
             "action": action,
-            "error":  "Aucun IBAN trouvé dans le message. Veuillez fournir un IBAN valide.",
+            "error":  "L'IBAN n'a pas pu être identifié. Veuillez préciser le compte à analyser.",
         }
 
     return {"iban": iban, "action": action, "error": None}
@@ -217,6 +243,15 @@ def analyze_fraud(state: FraudAgentState) -> dict:
         tracfin_required=tracfin,
     )
 
+    # ── Sélectionner des transactions suspectes pour le LLM ──────────────
+    # On prend les 5 plus gros montants + les transactions liées à des règles
+    suspicious_samples = []
+    if not df.empty:
+        # Top 5 montants
+        top_amounts = df.sort_values(by=df.columns[df.columns.str.contains("amount|montant")][0], ascending=False).head(5)
+        for _, row in top_amounts.iterrows():
+            suspicious_samples.append(f"• {row.get('timestamp','?')} | {row.get('amount', row.get('transaction_amount',0)):,.2f} TND | {row.get('transaction_type','?')} -> {row.get('counterparty_iban','?')}")
+
     return {
         "fraud_results":    rule_results,
         "score_behavioral": score_behavioral,
@@ -229,6 +264,7 @@ def analyze_fraud(state: FraudAgentState) -> dict:
         "sheet_url":        output_data.get("sheet_url"),
         "drive_url":        output_data.get("drive_url"),
         "output_errors":    output_data.get("errors", []),
+        "suspicious_samples": "\n".join(suspicious_samples[:5]),
         "error":            None,
     }
 
@@ -285,30 +321,34 @@ def generate_summary(state: FraudAgentState) -> dict:
         for r in triggered_rules
     ) or "  Aucune règle déclenchée."
 
+    samples_text = state.get("suspicious_samples", "Aucun échantillon disponible.")
+
     risk_emoji = {"APPROVED": "🟢", "REVIEW": "🟡", "HOLD": "🟠", "BLOCK": "🔴"}.get(risk_level, "⚪")
 
-    prompt = f"""Tu es un expert en détection de fraude bancaire. Génère un résumé concis et professionnel en français de l'analyse suivante.
+    prompt = f"""Tu es le Senior Fraud Compliance Officer (Expert AML/CTF) de BankChat.
 
-IBAN analysé : {iban}
-Transactions : {account_sum.get('total_transactions', 0)} | Montant total : {account_sum.get('total_amount', 0):,.2f} TND
-Score final  : {score_final}/100
-Niveau risque: {risk_emoji} {risk_level}
-TRACFIN      : {"OUI ⚠️" if tracfin else "NON"}
+IBAN : {iban}
+Score Risque : {score_final}/100 ({risk_level})
+TRACFIN : {"REQUIS ⚠️" if tracfin else "Non requis"}
+Activité : {account_sum.get('total_transactions', 0)} txs ({account_sum.get('total_amount', 0):,.2f} TND)
 
 Règles déclenchées :
 {rules_text}
 
-{"Rapport Excel : " + download_url if download_url else ""}
+Échantillons de transactions notables :
+{samples_text}
 
-Instructions :
-- 3 à 5 phrases maximum
-- Cite les règles déclenchées les plus importantes
-- Recommande une action concrète (bloquer, réviser, approuver)
-- Mentionne TRACFIN si requis
-- Ton professionnel et factuel"""
+STRUCTURE DU RAPPORT (RÉPONDS EN FRANÇAIS) :
+1. ANALYSE MULTI-FACTEURS : Explique la corrélation entre les règles déclenchées. Ne te contente pas de les lister. (Ex: "Le client effectue des dépôts structurés juste avant des transferts nocturnes vers des IPs étrangères, ce qui suggère une tentative de dissimulation de fonds.")
+2. ÉVALUATION DES ÉCHANTILLONS : Commente brièvement les transactions les plus suspectes citées ci-dessus.
+3. VERDICT & JUSTIFICATION : Confirme le niveau de risque ({risk_level}) et explique pourquoi il est proportionné.
+4. ACTIONS IMMÉDIATES : Liste les étapes (ex: Demander justificatifs, Blocage temporaire, Déclaration TRACFIN).
+
+TON : Clinique, autoritaire, expert, sans fioritures."""
 
     try:
         llm      = _get_llm()
+        # On utilise un système de chain-of-thought implicite via la structure demandée
         response = llm.invoke([HumanMessage(content=prompt)])
         summary  = response.content.strip()
     except Exception as exc:
