@@ -35,7 +35,7 @@ Login with:
 
 1. Click the realm dropdown in the **top-left corner**
 2. Select **"Create realm"**
-3. Set **Realm name** to ``
+3. Set **Realm name** to `myrealm`
 4. Click **Create**
 
 ---
@@ -123,7 +123,42 @@ Without this step, the JWT token's `aud` field won't contain `bank_chat` and the
 
 ---
 
-## 7. Import Realm Configuration
+## 7. Create Realm Roles
+
+The application uses specific roles to control access to features.
+
+1. Go to **Realm roles** in the sidebar
+2. Click **"Create role"**
+3. Create the following roles one by one:
+   - `bank_agent`: Allows access to specialized nodes (Fraud Agent, SQL Agent).
+   - `admin`: Full access to the administration dashboard and system triggers.
+4. Click **Save** for each.
+
+---
+
+## 8. Assign Roles to Users
+
+Once roles are created, you must assign them to your test users or teammates.
+
+1. Go to **Users** and click on a username (e.g., `testuser`)
+2. Click the **Role mapping** tab
+3. Click **"Assign role"**
+4. Search for the roles you created (e.g., `bank_agent`)
+5. Select the roles and click **Assign**
+
+---
+
+## 9. Onboarding Teammates
+
+To add someone to the project:
+
+1. Follow **Step 6** to create a user for them.
+2. Follow **Step 8** to assign them the necessary roles.
+3. Share the frontend URL (**http://localhost:4200**) and their temporary credentials.
+
+---
+
+## 10. Import Realm Configuration
 
 A `realm-export.json` file is included in the `keycloak/` folder. This contains the pre-configured realm, client, mappers, and settings so you do not have to repeat steps 2–5 manually.
 
@@ -149,7 +184,7 @@ docker compose up -d
 
 ---
 
-## 8. Apply the Custom Theme
+## 11. Apply the Custom Theme
 
 1. Make sure the container is running with the volume mount in `docker-compose.yml`:
 ```yaml
@@ -164,7 +199,7 @@ volumes:
 
 ---
 
-## 9. Verify Your Setup
+## 12. Verify Your Setup
 
 Open these URLs to confirm everything is working:
 
@@ -180,18 +215,18 @@ http://localhost:8080/realms/myrealm/protocol/openid-connect/auth?client_id=bank
 
 ---
 
-## 10. How It All Connects
+## 13. How It All Connects
 
 ```
 User opens http://localhost:4200
         ↓
 Redirected to Keycloak login (port 8080)
         ↓
-User logs in → Keycloak issues JWT
+User logs in → Keycloak issues JWT (including assigned roles)
         ↓
 Angular attaches JWT to all API requests (via authInterceptor)
         ↓
-Django validates JWT against Keycloak's public key
+Django validates JWT and checks roles
         ↓
 request.user is set from token's preferred_username
 ```
@@ -199,25 +234,26 @@ request.user is set from token's preferred_username
 ### Frontend (Angular)
 - `keycloak-js` initializes before Angular bootstraps in `main.ts`
 - `KeycloakService` (static singleton) manages the Keycloak instance
-- `authInterceptor` adds `Authorization: Bearer <token>` to all HTTP requests
-- Config lives in `frontend/src/environments/environment.ts`
+- `authInterceptor` adds `Authorization: Bearer <token>` to all HTTP requests:
+- Guards like `adminGuard` use `keycloakService.getUserRoles()` to protect routes.
 
 ### Backend (Django)
 - `chatbot/auth/keycloak_client.py` fetches and caches the realm's RSA public key
 - `chatbot/auth/authentication.py` validates JWT tokens on every request via DRF
-- Key settings in `config/settings.py`: `KEYCLOAK_URL`, `KEYCLOAK_REALM`, `KEYCLOAK_CLIENT_ID`
+- `chatbot/auth/permissions.py` provides `IsAdmin` and `IsBankAgent` checks based on token roles.
 
 ---
 
-## 11. Troubleshooting
+## 14. Troubleshooting
 
 | Error | Cause | Fix |
 |---|---|---|
-| "Client not found" on login page | Client ID mismatch (case-sensitive) | Check **Clients** → Client ID column — must be `bank_chat` with underscore |
+| "Client not found" on login page | Client ID mismatch (case-sensitive) | Check **Clients** → Client ID column — must be `bank_chat` |
 | CORS error on `/token` endpoint | Web origins has `/*` suffix | Set Web origins to `http://localhost:4200` (no path suffix) |
-| 403 Forbidden from backend | Token audience mismatch | Add the audience mapper (Step 4) |
-| Blank page after login | Angular DI issue — KeycloakService not shared | Ensure `KeycloakService` uses static fields |
+| 403 Forbidden from backend | Audience mismatch OR Missing Role | Add Audience mapper (Step 4) AND confirm user has `bank_agent` role (Step 8) |
+| Blank page after login | Angular DI issue | Ensure `KeycloakService` uses static fields |
 | "Authentication service unavailable" | Keycloak init failed | Keycloak 17+ uses no `/auth` prefix — check `environment.ts` URL |
 | Credentials rejected on login | User in wrong realm or password is Temporary | Confirm user is in `myrealm` and Temporary is `OFF` |
 | Admin console not loading | Keycloak still starting | Wait 30–60s and retry — check `docker logs bank_chat_keycloak` |
-| Port 8080 already in use | Another Keycloak instance running | Run `docker ps`, stop the old container, then `docker compose up -d` |
+| Admin dashboard hidden in UI | User missing `admin` role | Go to **Users** → **Role Mapping** and assign `admin` role |
+| Port 8080 already in use | Another Keycloak instance running | Run `docker ps`, stop the old container, then `docker compose up -d` |
