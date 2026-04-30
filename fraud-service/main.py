@@ -16,15 +16,18 @@ from pydantic import BaseModel
 from langchain_core.messages import HumanMessage
 
 from fraud.database     import SessionLocal, Base, engine
-from fraud.models       import FraudRuleModel        # noqa: F401
+from fraud.models       import FraudRuleModel ,FraudDecisionLog        # noqa: F401
 from fraud.crud         import seed_default_rules
 from fraud.rule_router import router as rule_router
 from fraud.graph        import run_fraud_agent
-
+from typing import Optional
 import asyncio
 from fraud.db import init_db, get_settings, update_settings
 from fraud.scheduler import scheduler_loop, run_global_analysis_task
 from fraud.auth import require_bank_agent
+from sqlalchemy import desc
+from fraud.mail_log_service import MailLogService
+
 
 logger = logging.getLogger(__name__)
 
@@ -201,6 +204,7 @@ async def analyze(
 
 @app.get("/reports/{filename}")
 async def download_report(filename: str):
+    """Public download — filename acts as a capability token (UUID-timestamped)."""
     if ".." in filename or "/" in filename or "\\" in filename:
         raise HTTPException(status_code=400, detail="Nom de fichier invalide.")
     filepath = _reports_dir() / filename
@@ -214,7 +218,7 @@ async def download_report(filename: str):
 
 
 @app.get("/reports")
-async def list_reports():
+async def list_reports(_user: dict = Depends(require_bank_agent)):
     reports_dir = _reports_dir()
     files = sorted(reports_dir.glob("*.xlsx"), key=lambda f: f.stat().st_mtime, reverse=True)
     base = os.getenv("FRAUD_SERVICE_PUBLIC_URL", "http://localhost:8001").rstrip("/")
@@ -242,7 +246,8 @@ async def list_decision_logs(
     risk_level: str = None,
     mail_sent:  bool = None,
     user_id:    str = None,
-   ):
+    _user: dict = Depends(require_bank_agent)
+   ):    
     """
     Liste paginée des analyses avec filtres.
     Angular l'appelle via GET /fraud/decision-logs
@@ -269,7 +274,7 @@ async def list_decision_logs(
 
 
 @app.get("/decision-logs/stats")
-async def decision_log_stats():
+async def decision_log_stats(_user: dict = Depends(require_bank_agent)):
     """Statistiques pour les metric cards du dashboard."""
     db = SessionLocal()
     try:
@@ -294,7 +299,7 @@ async def decision_log_stats():
 
 
 @app.get("/decision-logs/{log_id}")
-async def get_decision_log(log_id: str):
+async def get_decision_log(log_id: str, _user: dict = Depends(require_bank_agent)):
     """Détail complet d'un log — pour le drawer/modal dans l'UI."""
     db = SessionLocal()
     try:
@@ -305,8 +310,8 @@ async def get_decision_log(log_id: str):
     finally:
         db.close()
 
-
-async def update_log_mail(log_id: str, data: MailUpdatePayload):
+@app.post("/decision-logs/{log_id}")
+async def update_log_mail(log_id: str, data: MailUpdatePayload, _user: dict = Depends(require_bank_agent)):
     """
     Appelé par mail_agent (orchestrateur Django) après envoi du mail.
     Utilise MailLogService.update_with_mail() pour garantir l'atomicité.
@@ -328,6 +333,15 @@ async def update_log_mail(log_id: str, data: MailUpdatePayload):
     finally:
         db.close()
  
+@app.post("/decision-logs/{log_id}/mail")
+async def update_log_mail_endpoint(
+    log_id: str,
+    data: MailUpdatePayload,
+    _user: dict = Depends(require_bank_agent)
+):
+    return await update_log_mail(log_id, data)
+
+
 @app.get("/health")
 def health():
     reports_dir = _reports_dir()

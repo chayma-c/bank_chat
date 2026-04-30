@@ -7,6 +7,7 @@ from langchain_groq import ChatGroq
 from langchain_ollama import ChatOllama
 from langchain_core.messages import SystemMessage, AIMessage, HumanMessage
 from .state import BankChatState
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -150,58 +151,10 @@ def fraud_agent(state: BankChatState) -> BankChatState:
         logger.exception("Fraud agent error")
         return {**state, "messages": [AIMessage(content=f"❌ Error: {e}")], "agent": "fraud_agent", "context": {}}
 
-def mail_agent(state: BankChatState) -> BankChatState:
-    context = state.get("context", {})
-    if not context or (context.get("score_final", 0) < 50 and not context.get("tracfin_required")):
-        return {**state, "agent": "mail_agent"}
-    
-    # Simplified mail composition for brevity, assuming existing mail-service logic
-    payload = {
-        "to": ALERT_EMAIL,
-        "subject": f"Fraud Alert: {context.get('iban')}",
-        "template": "fraud_alert",
-        "context": context,
-        "user_id": state["user_id"],
-        "session_id": state["session_id"]
-    }
-    try:
-        httpx.post(f"{MAIL_SERVICE_URL}/send", json=payload, timeout=10)
-    except:
-        logger.warning("Mail service failed")
-    return {**state, "agent": "mail_agent"}
+# (mail_agent full implementation is defined below at line ~279)
 
-def stream_agent_response(intent: str, state: BankChatState):
-    messages = state["messages"]
-    if intent == "fraud":
-        try:
-            prefix, result, is_analyze = _get_fraud_decision_and_result(
-                messages, state["user_id"], state["session_id"], state.get("auth_token")
-            )
-            yield prefix, "fraud_agent"
-            if is_analyze:
-                yield result.get("llm_summary", "Analysis complete."), "fraud_agent", result
-                return
-            agent_key = "fraud_agent"
-        except Exception as e:
-            yield f"❌ Error: {e}", "fraud_agent"
-            return
-    elif intent == "text_to_sql":
-        try:
-            result = text_to_sql_agent(state)
-            # text_to_sql_agent returns messages as a list of AIMessages
-            content = result["messages"][0].content
-            yield content, "text2sql_agent"
-            return
-        except Exception as e:
-            yield f"❌ Error service SQL : {e}", "text2sql_agent"
-            return
-    else:
-        agent_key = {"account": "account_agent", "transfer": "transfer_agent", "support": "support_agent"}.get(intent, "fallback")
-    
-    system = SystemMessage(content=SYSTEM_PROMPTS.get(agent_key, SYSTEM_PROMPTS["fallback"]))
-    for chunk in llm.stream([system] + list(messages)):
-        if chunk.content:
-            yield chunk.content, agent_key
+
+
 
 # ── Routing & Agents ──────────────────────────────────────────────────────────
 
@@ -301,6 +254,40 @@ def text_to_sql_agent(state: BankChatState) -> dict:
             "agent":    "fraud_agent",
             "context":  {},
         }
+
+
+# ── Mail helpers ──────────────────────────────────────────────────────────────
+
+def _extract_json(text: str) -> dict | None:
+    """
+    Parse the first JSON object found in `text`.
+    Returns a dict or None if no valid JSON object is found.
+    """
+    import re as _re
+    match = _re.search(r'\{.*\}', text, _re.DOTALL)
+    if not match:
+        return None
+    try:
+        return json.loads(match.group())
+    except json.JSONDecodeError:
+        return None
+
+
+def call_mail_service(payload: dict) -> dict:
+    """
+    POST payload to mail-service /send.
+    Returns the JSON response dict, or {"status": "error", "detail": ...} on failure.
+    """
+    try:
+        resp = httpx.post(f"{MAIL_SERVICE_URL}/send", json=payload, timeout=15.0)
+        resp.raise_for_status()
+        return resp.json()
+    except httpx.HTTPStatusError as exc:
+        logger.error(f"[call_mail_service] HTTP {exc.response.status_code}: {exc.response.text[:200]}")
+        return {"status": "error", "detail": str(exc)}
+    except Exception as exc:
+        logger.error(f"[call_mail_service] Failed: {exc}")
+        return {"status": "error", "detail": str(exc)}
 
 
 # ── Mail agent (agentique hybride) ────────────────────────────────────────────
@@ -408,6 +395,7 @@ def mail_agent(state: BankChatState) -> BankChatState:
 
     if decision_log_id:
         try:
+            _auth_headers = {"Authorization": f"Bearer {state.get('auth_token')}"} if state.get("auth_token") else {}
             patch_resp = httpx.patch(
                 f"{FRAUD_SERVICE_URL}/decision-logs/{decision_log_id}/mail",
                 json={
@@ -417,6 +405,7 @@ def mail_agent(state: BankChatState) -> BankChatState:
                     "mail_status":    status,
                     "mail_id":        result.get("id"),
                 },
+                headers=_auth_headers,
                 timeout=5.0,
             )
             patch_resp.raise_for_status()
@@ -440,13 +429,12 @@ def mail_agent(state: BankChatState) -> BankChatState:
 
 
 
-def stream_agent_response(intent: str, messages: list, user_id: str = "anonymous", session_id: str = ""):
+def stream_agent_response(intent: str, messages: list, user_id: str = "anonymous", session_id: str = "", auth_token: str | None = None):
     """
     Yields (token, agent_key) tuples — ou (token, agent_key, fraud_result) pour fraud ANALYZE.
-
-    CORRECTION : en path ANALYZE, yield un 3e élément (le dict résultat fraude brut)
-    sur le dernier yield. views.py le récupère pour appeler mail_agent ensuite.
     """
+
+    # ── FRAUD FLOW ─────────────────────────────────────────
     if intent == "fraud":
         last_msg = ""
         for msg in reversed(messages):
@@ -456,22 +444,18 @@ def stream_agent_response(intent: str, messages: list, user_id: str = "anonymous
 
         decision_prompt = (
             "You are a fraud detection reasoning engine. "
-            "Based on the user's message, decide if we need to call a technical tool (ANALYZE) "
-            "to check an IBAN/transaction, or if we should just respond as an expert (TALK).\n\n"
+            "Based on the user's message, decide if we need ANALYZE or TALK.\n\n"
             f"Message: {last_msg}\n\n"
-            "Rules:\n"
-            "- ANALYZE: If there is an IBAN, a specific transaction to check, or a request for deep scan.\n"
-            "- TALK: If it's a general question, a request for advice, or an explanation of concepts.\n\n"
-            "Your answer must be in this format:\n"
-            "REASONING: <brief explanation in French>\n"
-            "DECISION: <ANALYZE or TALK>"
+            "Format:\nREASONING: <text>\nDECISION: <ANALYZE or TALK>"
         )
 
         try:
             decision_resp = llm.invoke(decision_prompt).content
-            lines     = decision_resp.strip().split("\n")
+            lines = decision_resp.strip().split("\n")
+
             reasoning = "Analyse de la requête..."
-            decision  = "TALK"
+            decision = "TALK"
+
             for line in lines:
                 if line.upper().startswith("REASONING:"):
                     reasoning = line.split(":", 1)[1].strip()
@@ -482,56 +466,58 @@ def stream_agent_response(intent: str, messages: list, user_id: str = "anonymous
 
             if decision == "ANALYZE":
                 iban = extract_iban(messages)
+
+                _headers = {"Authorization": f"Bearer {auth_token}"} if auth_token else {}
                 resp = httpx.post(
                     f"{FRAUD_SERVICE_URL}/analyze",
                     json={
-                        "message":    last_msg,
-                        "iban":       iban,
-                        "action":     "fraud_check",
-                        "user_id":    user_id,
+                        "message": last_msg,
+                        "iban": iban,
+                        "action": "fraud_check",
+                        "user_id": user_id,
                         "session_id": session_id,
                         "excel_path": "",
                     },
+                    headers=_headers,
                     timeout=120.0,
                 )
                 resp.raise_for_status()
-                result  = resp.json()
-                summary = result.get("llm_summary", result.get("summary", "Analyse de fraude terminée."))
 
-                # ── CORRECTION : yield le résultat brut en 3e élément ──────────
-                # views.py (StreamChatView) le récupère avec :
-                #   for token, agent_key, *extra in stream_agent_response(...)
-                # et appelle mail_agent(state_with_context=result) ensuite.
+                result = resp.json()
+                summary = result.get("llm_summary", "Analyse terminée.")
+
                 yield summary, "fraud_agent", result
 
             else:
-                # Path TALK — pas de résultat fraude brut
                 system = SystemMessage(content=SYSTEM_PROMPTS["fraud_agent"])
                 for chunk in llm.stream([system] + list(messages)):
-                    token = chunk.content
-                    if token:
-                        yield token, "fraud_agent"
+                    if chunk.content:
+                        yield chunk.content, "fraud_agent"
 
         except Exception as e:
-            yield f"❌ Erreur lors de la décision : {str(e)}", "fraud_agent"
+            yield f"❌ Erreur : {str(e)}", "fraud_agent"
+
         return
 
-    # ── Agents classiques ─────────────────────────────────────────────────────
+    # ── OTHER AGENTS ───────────────────────────────────────
     agent_key_map = {
-        "account":     "account_agent",
-        "transfer":    "transfer_agent",
-        "support":     "support_agent",
+        "account": "account_agent",
+        "transfer": "transfer_agent",
+        "support": "support_agent",
         "text_to_sql": "text_to_sql_agent",
-        "sql":         "text_to_sql_agent",
+        "sql": "text_to_sql_agent",
     }
+
     agent_key = agent_key_map.get(intent, "fallback")
 
+    # ── TEXT TO SQL (inchangé) ─────────────────────────────
     if agent_key == "text_to_sql_agent":
         last_user_msg = ""
         for msg in reversed(messages):
             if msg.__class__.__name__ == "HumanMessage":
                 last_user_msg = msg.content
                 break
+
         try:
             resp = httpx.post(
                 f"{os.getenv('TEXT2SQL_SERVICE_URL', 'http://text-to-sql-service:8003')}/query",
@@ -540,31 +526,22 @@ def stream_agent_response(intent: str, messages: list, user_id: str = "anonymous
             )
             resp.raise_for_status()
             result = resp.json()
+
             yield result.get("explanation", "Query executed."), "text2sql_agent"
+
         except Exception as e:
             yield f"❌ Erreur service SQL : {str(e)}", "text2sql_agent"
+
         return
 
+    # ── NORMAL STREAM ──────────────────────────────────────
     system = SystemMessage(content=SYSTEM_PROMPTS.get(agent_key, SYSTEM_PROMPTS["fallback"]))
-    for chunk in llm.stream([system] + list(messages)):
-        token = chunk.content
-        if token:
-            yield token, agent_key
-        response = httpx.post(
-            f"{os.getenv('TEXT2SQL_SERVICE_URL', 'http://text-to-sql-service:8003')}/query",
-            json={"question": last_user_msg, "user_id": state.get("user_id", "anonymous")},
-            timeout=60.0,
-        )
-        response.raise_for_status()
-        result = response.json()
-        return {
-            "messages": [AIMessage(content=result.get("explanation", "Query executed."))],
-            "agent": "text2sql_agent",
-        }
+
+    try:
+        for chunk in llm.stream([system] + list(messages)):
+            if chunk.content:
+                yield chunk.content, agent_key
+
     except Exception as e:
-        logger.exception("[text_to_sql_agent] Error")
-        return {
-            "messages": [AIMessage(content=f"❌ Erreur service SQL : {str(e)}")],
-            "agent": "text2sql_agent",
-            "error": str(e),
-        }
+        logger.exception("[stream_agent_response] Error")
+        yield f"❌ Error: {str(e)}", agent_key

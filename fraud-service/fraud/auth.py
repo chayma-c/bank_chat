@@ -17,8 +17,12 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 logger = logging.getLogger(__name__)
 
 # ── Env vars (shared with Django via backend/.env) ───────────────────────────
-KEYCLOAK_URL    = os.getenv("KEYCLOAK_URL", "")
+KEYCLOAK_URL    = os.getenv("KEYCLOAK_URL", "").rstrip("/")
 KEYCLOAK_REALM  = os.getenv("KEYCLOAK_REALM", "")
+# Defensive: if KEYCLOAK_URL doesn't end with /auth, add it
+# Keycloak is configured with KC_HTTP_RELATIVE_PATH=/auth
+if KEYCLOAK_URL and not KEYCLOAK_URL.endswith("/auth"):
+    KEYCLOAK_URL = KEYCLOAK_URL + "/auth"
 KEYCLOAK_CLIENT = os.getenv("KEYCLOAK_CLIENT_ID", "")
 # KEYCLOAK_ISSUER is the *public* base URL (e.g. http://localhost/auth)
 KEYCLOAK_ISSUER = os.getenv("KEYCLOAK_ISSUER", "")

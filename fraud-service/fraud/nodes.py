@@ -29,6 +29,7 @@ from .scoring         import (
     check_tracfin_required,
 )
 from .state import FraudAgentState
+from .mail_log_service import MailLogService
 import uuid as _uuid
 
 logger = logging.getLogger(__name__)

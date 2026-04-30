@@ -279,6 +279,7 @@ class StreamChatView(View):
                     intent_state["messages"],
                     user_id=user_id,
                     session_id=session_id,
+                    auth_token=auth_token,
                 ):
                     full_response += token
                     agent_used     = agent_key
@@ -320,6 +321,7 @@ class StreamChatView(View):
                             "agent":      "fraud_agent",
                             "user_id":    user_id,
                             "session_id": session_id,
+                            "auth_token": auth_token,
                         }
                         mail_agent(mail_state)
                         logger.info("[StreamChatView] ✅ mail_agent completed")
