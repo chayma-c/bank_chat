@@ -7,7 +7,7 @@ import { RouterModule  } from '@angular/router';
 import { FraudRulesService }  from './fraud-rules.service';
 import { RuleModalComponent } from './rule-modal.component';
 import { FraudRule, RuleFormData, RiskDomain } from './fraud-rule.model';
-
+import { DecisionLogsService, DecisionLog, DecisionLogStats } from '../services/decision-logs.service';
 type ModalMode = 'create' | 'edit' | 'delete';
 
 @Component({
