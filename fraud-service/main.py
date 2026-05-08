@@ -16,18 +16,15 @@ from pydantic import BaseModel
 from langchain_core.messages import HumanMessage
 
 from fraud.database     import SessionLocal, Base, engine
-from fraud.models       import FraudRuleModel ,FraudDecisionLog        # noqa: F401
+from fraud.models       import FraudRuleModel        # noqa: F401
 from fraud.crud         import seed_default_rules
 from fraud.rule_router import router as rule_router
 from fraud.graph        import run_fraud_agent
-from typing import Optional
+
 import asyncio
 from fraud.db import init_db, get_settings, update_settings
 from fraud.scheduler import scheduler_loop, run_global_analysis_task
 from fraud.auth import require_bank_agent
-from sqlalchemy import desc
-from fraud.mail_log_service import MailLogService
-
 
 logger = logging.getLogger(__name__)
 
@@ -87,7 +84,7 @@ class SettingsUpdate(BaseModel):
     dayOfWeek: int
 
 @app.get("/settings")
-async def get_fraud_settings(_user: dict = Depends(require_bank_agent),):
+async def get_fraud_settings():
     s = get_settings()
     if not s:
         return {"frequency": "manual", "time": "02:00", "dayOfWeek": 1}
@@ -104,7 +101,7 @@ async def get_fraud_settings(_user: dict = Depends(require_bank_agent),):
 async def save_fraud_settings(
     data: SettingsUpdate,
     _user: dict = Depends(require_bank_agent),
-    ):
+):
     try:
         update_settings(data.frequency, data.time, data.dayOfWeek)
         return {"status": "success", "message": "Settings updated"}
@@ -150,20 +147,12 @@ class FraudRequest(BaseModel):
     session_id: str = ""
     excel_path: str = ""
 
- 
-class MailUpdatePayload(BaseModel):
-    mail_sent:      bool
-    mail_recipient: Optional[str] = None
-    mail_template:  Optional[str] = None
-    mail_status:    Optional[str] = None
-    mail_id:        Optional[str] = None
- 
- 
+
 @app.post("/analyze")
 async def analyze(
     req: FraudRequest,
     _user: dict = Depends(require_bank_agent)
-    ):
+):
     iban = req.iban or extract_iban_from_text(req.message)
     if req.message:
         user_content = req.message
@@ -197,14 +186,14 @@ async def analyze(
         "sheet_url":          result.get("sheet_url", ""),
         "drive_url":          result.get("drive_url", ""),
         "output_errors":      result.get("output_errors", []),
-        "decision_log_id":    result.get("decision_log_id", ""),
-
     }
 
 
 @app.get("/reports/{filename}")
-async def download_report(filename: str):
-    """Public download — filename acts as a capability token (UUID-timestamped)."""
+async def download_report(
+    filename: str,
+    _user: dict = Depends(require_bank_agent)
+):
     if ".." in filename or "/" in filename or "\\" in filename:
         raise HTTPException(status_code=400, detail="Nom de fichier invalide.")
     filepath = _reports_dir() / filename
@@ -236,119 +225,10 @@ async def list_reports(_user: dict = Depends(require_bank_agent)):
     }
 
 
-# ── Decision Logs endpoints ──────────────────────────────────────────────────
-
-@app.get("/decision-logs")
-async def list_decision_logs(
-    limit:      int = 50,
-    offset:     int = 0,
-    iban:       str = None,
-    risk_level: str = None,
-    mail_sent:  bool = None,
-    user_id:    str = None,
-    _user: dict = Depends(require_bank_agent)
-   ):    
-    """
-    Liste paginée des analyses avec filtres.
-    Angular l'appelle via GET /fraud/decision-logs
-    """
-    db = SessionLocal()
-    try:
-        q = db.query(FraudDecisionLog)
-        if iban:       q = q.filter(FraudDecisionLog.iban.contains(iban.upper()))
-        if risk_level: q = q.filter(FraudDecisionLog.risk_level == risk_level)
-        if mail_sent is not None: q = q.filter(FraudDecisionLog.mail_sent == mail_sent)
-        if user_id:    q = q.filter(FraudDecisionLog.user_id == user_id)
-
-        total = q.count()
-        logs  = q.order_by(desc(FraudDecisionLog.created_at)).offset(offset).limit(limit).all()
-
-        return {
-            "total":  total,
-            "limit":  limit,
-            "offset": offset,
-            "logs":   [l.to_dict() for l in logs],
-        }
-    finally:
-        db.close()
-
-
-@app.get("/decision-logs/stats")
-async def decision_log_stats(_user: dict = Depends(require_bank_agent)):
-    """Statistiques pour les metric cards du dashboard."""
-    db = SessionLocal()
-    try:
-        from sqlalchemy import func
-        total     = db.query(func.count(FraudDecisionLog.id)).scalar()
-        critical  = db.query(func.count(FraudDecisionLog.id)).filter(
-                        FraudDecisionLog.risk_level == "BLOCK").scalar()
-        tracfin   = db.query(func.count(FraudDecisionLog.id)).filter(
-                        FraudDecisionLog.tracfin_required == True).scalar()
-        mailed    = db.query(func.count(FraudDecisionLog.id)).filter(
-                        FraudDecisionLog.mail_sent == True).scalar()
-        avg_score = db.query(func.avg(FraudDecisionLog.score_final)).scalar()
-        return {
-            "total_analyses": total     or 0,
-            "block_count":    critical  or 0,
-            "tracfin_count":  tracfin   or 0,
-            "mailed_count":   mailed    or 0,
-            "avg_score":      round(float(avg_score), 1) if avg_score else 0.0,
-        }
-    finally:
-        db.close()
-
-
-@app.get("/decision-logs/{log_id}")
-async def get_decision_log(log_id: str, _user: dict = Depends(require_bank_agent)):
-    """Détail complet d'un log — pour le drawer/modal dans l'UI."""
-    db = SessionLocal()
-    try:
-        log = db.query(FraudDecisionLog).filter(FraudDecisionLog.id == log_id).first()
-        if not log:
-            raise HTTPException(404, detail=f"Log {log_id} not found")
-        return log.to_dict()
-    finally:
-        db.close()
-
-@app.post("/decision-logs/{log_id}")
-async def update_log_mail(log_id: str, data: MailUpdatePayload, _user: dict = Depends(require_bank_agent)):
-    """
-    Appelé par mail_agent (orchestrateur Django) après envoi du mail.
-    Utilise MailLogService.update_with_mail() pour garantir l'atomicité.
-    """
-    db = SessionLocal()
-    try:
-        svc = MailLogService(db)
-        updated = svc.update_with_mail(
-            log_id         = log_id,
-            mail_sent      = data.mail_sent,
-            mail_recipient = data.mail_recipient,
-            mail_template  = data.mail_template,
-            mail_status    = data.mail_status,
-            mail_id        = data.mail_id,
-        )
-        if not updated:
-            raise HTTPException(404, detail=f"Log {log_id} not found")
-        return {"status": "updated", "log_id": log_id, "mail_sent": data.mail_sent}
-    finally:
-        db.close()
- 
-@app.post("/decision-logs/{log_id}/mail")
-async def update_log_mail_endpoint(
-    log_id: str,
-    data: MailUpdatePayload,
-    _user: dict = Depends(require_bank_agent)
-):
-    return await update_log_mail(log_id, data)
-
-
 @app.get("/health")
 def health():
-    reports_dir = _reports_dir()
     return {
         "status":        "ok",
         "service":       "fraud-service",
         "version":       "2.0.0",
-        "reports_dir":   str(reports_dir),
-        "reports_count": len(list(reports_dir.glob("*.xlsx"))) if reports_dir.exists() else 0,
-    }
+    }

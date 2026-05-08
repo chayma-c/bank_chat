@@ -39,10 +39,7 @@ export class KeycloakService {
   }
 
   get userId(): string {
-    return KeycloakService.kc.tokenParsed?.['preferred_username']
-      ?? KeycloakService.kc.tokenParsed?.['name']
-      ?? KeycloakService.kc.subject
-      ?? 'anonymous';
+    return KeycloakService.kc.tokenParsed?.['sub'] ?? 'anonymous';
   }
 
   get username(): string {

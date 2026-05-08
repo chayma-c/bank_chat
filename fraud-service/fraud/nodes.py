@@ -30,8 +30,6 @@ from .scoring         import (
     check_tracfin_required,
 )
 from .state import FraudAgentState
-from .mail_log_service import MailLogService
-import uuid as _uuid
 
 logger = logging.getLogger(__name__)
 
@@ -297,147 +295,57 @@ def export_transactions(state: FraudAgentState) -> dict:
         return {"error": f"Erreur export : {exc}"}
 
 
-
-def _save_decision_log(state: FraudAgentState, summary: str) -> None:
-    """
-    Persiste l'analyse dans fraud_decision_logs.
-    Non bloquant — ne lève jamais d'exception.
-    """
-    try:
-        from .models import FraudDecisionLog
-        db = SessionLocal()
-        try:
-            fraud_results  = state.get("fraud_results", [])
-            triggered      = [r for r in fraud_results if r.get("triggered")]
-            account_sum    = state.get("account_summary") or {}
-
-            log = FraudDecisionLog(
-                id                     = str(_uuid.uuid4()),
-                user_id                = state.get("user_id"),
-                session_id             = state.get("session_id"),
-                iban                   = state.get("iban", ""),
-                transactions_count     = state.get("transactions_count", 0),
-                date_range             = account_sum.get("date_range"),
-                score_behavioral       = state.get("score_behavioral", 0),
-                score_aml              = state.get("score_aml", 0),
-                score_final            = state.get("score_final", 0),
-                risk_level             = state.get("risk_level", ""),
-                tracfin_required       = state.get("tracfin_required", False),
-                rules_triggered        = len(triggered),
-                rules_evaluated        = len(fraud_results),
-                triggered_rules_detail = [
-                    {
-                        "rule":     r.get("rule_name", r.get("rule", "")),
-                        "domain":   r.get("domain", ""),
-                        "points":   r.get("points", 0),
-                        "severity": r.get("severity", ""),
-                        "details":  r.get("details", ""),
-                    }
-                    for r in triggered
-                ],
-                report_path            = state.get("report_path"),
-                download_url           = state.get("download_url"),
-                # mail_* rempli plus tard par mail_agent via update_decision_log_mail()
-                mail_sent              = False,
-                llm_summary            = summary,
-                error                  = state.get("error"),
-            )
-            db.add(log)
-            db.commit()
-            logger.info(f"[decision_log] Saved log {log.id} for IBAN={log.iban}")
-            # Stocker l'ID dans le state pour que mail_agent puisse le retrouver
-            state["decision_log_id"] = log.id
-        finally:
-            db.close()
-    except Exception as e:
-        logger.warning(f"[decision_log] Failed to save (non-blocking): {e}")
-
-
-def update_decision_log_mail(
-    log_id: str,
-    mail_sent: bool,
-    mail_recipient: str,
-    mail_template: str,
-    mail_status: str,
-    mail_id: str | None,
- ) -> None:
-    """
-    Met à jour les colonnes mail_* d'un decision log existant.
-    Appelé par mail_agent (nodes.py backend) après l'envoi.
-    """
-    try:
-        from .models import FraudDecisionLog
-        db = SessionLocal()
-        try:
-            log = db.query(FraudDecisionLog).filter(FraudDecisionLog.id == log_id).first()
-            if log:
-                log.mail_sent      = mail_sent
-                log.mail_recipient = mail_recipient
-                log.mail_template  = mail_template
-                log.mail_status    = mail_status
-                log.mail_id        = mail_id
-                db.commit()
-                logger.info(f"[decision_log] Updated mail info for log {log_id}")
-        finally:
-            db.close()
-    except Exception as e:
-        logger.warning(f"[decision_log] Failed to update mail info: {e}")
-
-
 # ══════════════════════════════════════════════════════════════════════════════
 # Nœud 4 — generate_summary
 # ══════════════════════════════════════════════════════════════════════════════
 
-def generate_summary(state) -> dict:
-    """
-    Génère un résumé LLM en français de l'analyse de fraude.
-    Persiste le log via MailLogService.create_pending() (mail_sent=False).
-    Retourne decision_log_id dans le state pour que mail_agent() puisse
-    appeler PATCH /decision-logs/{id}/mail après l'envoi.
-    """
-    from langchain_core.messages import HumanMessage
-    from .nodes import _get_llm        # import local pour éviter les cycles
- 
+def generate_summary(state: FraudAgentState) -> dict:
+    """Génère un résumé LLM en français de l'analyse de fraude."""
+
     error = state.get("error")
     if error:
-        return {"llm_summary": f"❌ Analyse impossible : {error}", "decision_log_id": ""}
- 
-    iban            = state.get("iban", "")
-    score_final     = state.get("score_final", 0)
-    risk_level      = state.get("risk_level", "UNKNOWN")
-    tracfin         = state.get("tracfin_required", False)
-    fraud_results   = state.get("fraud_results", [])
-    account_sum     = state.get("account_summary") or {}
-    download_url    = state.get("download_url", "")
+        return {"llm_summary": f"❌ Analyse impossible : {error}"}
+
+    iban          = state.get("iban", "")
+    score_final   = state.get("score_final", 0)
+    risk_level    = state.get("risk_level", "UNKNOWN")
+    tracfin       = state.get("tracfin_required", False)
+    fraud_results = state.get("fraud_results", [])
+    account_sum   = state.get("account_summary") or {}
+    download_url  = state.get("download_url", "")
+
     triggered_rules = [r for r in fraud_results if r.get("triggered")]
- 
-    # ── Prompt LLM ────────────────────────────────────────────────────────────
     rules_text = "\n".join(
         f"  • [{r.get('domain','?')}] {r.get('rule_name', r.get('rule','?'))} "
         f"(+{r.get('points',0)} pts) : {r.get('details','')}"
         for r in triggered_rules
     ) or "  Aucune règle déclenchée."
- 
+
+    samples_text = state.get("suspicious_samples", "Aucun échantillon disponible.")
+
     risk_emoji = {"APPROVED": "🟢", "REVIEW": "🟡", "HOLD": "🟠", "BLOCK": "🔴"}.get(risk_level, "⚪")
- 
-    prompt = f"""Tu es un expert en détection de fraude bancaire. Génère un résumé concis et professionnel en français.
- 
-            IBAN analysé : {iban}
-            Transactions : {account_sum.get('total_transactions', 0)} | Montant total : {account_sum.get('total_amount', 0):,.2f} TND
-            Score final  : {score_final}/100
-            Niveau risque: {risk_emoji} {risk_level}
-            TRACFIN      : {"OUI ⚠️" if tracfin else "NON"}
-            
-            Règles déclenchées :
-            {rules_text}
-            
-            Instructions :
-            - 3 à 5 phrases maximum
-            - Cite les règles déclenchées les plus importantes
-            - Recommande une action concrète (bloquer, réviser, approuver)
-            - Mentionne TRACFIN si requis
-            - Ton professionnel et factuel"""
- 
+
+    prompt = f"""Tu es le Senior Fraud Compliance Officer (Expert AML/CTF) de BankChat.
+
+IBAN : {iban}
+Score Risque : {score_final}/100 ({risk_level})
+TRACFIN : {"REQUIS ⚠️" if tracfin else "Non requis"}
+Activité : {account_sum.get('total_transactions', 0)} txs ({account_sum.get('total_amount', 0):,.2f} TND)
+
+Règles déclenchées :
+{rules_text}
+
+Échantillons de transactions notables :
+{samples_text}
+
+STRUCTURE DU RAPPORT (RÉPONDS EN FRANÇAIS) :
+1. ANALYSE MULTI-FACTEURS : Explique la corrélation entre les règles déclenchées. Ne te contente pas de les lister. (Ex: "Le client effectue des dépôts structurés juste avant des transferts nocturnes vers des IPs étrangères, ce qui suggère une tentative de dissimulation de fonds.")
+2. ÉVALUATION DES ÉCHANTILLONS : Commente brièvement les transactions les plus suspectes citées ci-dessus.
+3. VERDICT & JUSTIFICATION : Confirme le niveau de risque ({risk_level}) et explique pourquoi il est proportionné.
+4. ACTIONS IMMÉDIATES : Liste les étapes (ex: Demander justificatifs, Blocage temporaire, Déclaration TRACFIN).
+
+TON : Clinique, autoritaire, expert, sans fioritures."""
+
     try:
         llm      = _get_llm()
         # On utilise un système de chain-of-thought implicite via la structure demandée
@@ -450,50 +358,8 @@ def generate_summary(state) -> dict:
             f"Règles déclenchées : {len(triggered_rules)}\n"
             f"TRACFIN : {'OUI ⚠️' if tracfin else 'NON'}"
         )
- 
+
     if download_url:
         summary += f"\n\n📥 [Télécharger le rapport Excel]({download_url})"
- 
-    # ── Persister le log via MailLogService ───────────────────────────────────
-    # mail_sent = False ici — sera mis à True par PATCH après envoi du mail
-    decision_log_id = ""
-    db = SessionLocal()
-    try:
-        svc = MailLogService(db)
-        decision_log_id = svc.create_pending(
-            iban                   = iban,
-            user_id                = state.get("user_id"),
-            session_id             = state.get("session_id"),
-            transactions_count     = state.get("transactions_count", 0),
-            date_range             = account_sum.get("date_range"),
-            score_behavioral       = state.get("score_behavioral", 0),
-            score_aml              = state.get("score_aml", 0),
-            score_final            = score_final,
-            risk_level             = risk_level,
-            tracfin_required       = tracfin,
-            rules_triggered        = len(triggered_rules),
-            rules_evaluated        = len(fraud_results),
-            triggered_rules_detail = [
-                {
-                    "rule":     r.get("rule_name", r.get("rule", "")),
-                    "domain":   r.get("domain", ""),
-                    "points":   r.get("points", 0),
-                    "severity": r.get("severity", ""),
-                    "details":  r.get("details", ""),
-                }
-                for r in triggered_rules
-            ],
-            report_path            = state.get("report_path"),
-            download_url           = download_url,
-            llm_summary            = summary,
-            error                  = state.get("error"),
-        )
-    except Exception as e:
-        logger.warning(f"[generate_summary] MailLogService.create_pending failed: {e}")
-    finally:
-        db.close()
- 
-    return {
-        "llm_summary":    summary,
-        "decision_log_id": decision_log_id,   # ← transmis via /analyze response
-    }
+
+    return {"llm_summary": summary}

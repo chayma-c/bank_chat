@@ -123,9 +123,6 @@ services:
       DATABASE_URL: postgresql://sql_user:sql_password@db:5432/banking_data
       CORS_ORIGINS: "http://localhost:4200,http://localhost,http://localhost:80"
       KEYCLOAK_ISSUER: "http://localhost/auth"
-      KEYCLOAK_URL:       "http://keycloak:8080/auth"
-      KEYCLOAK_REALM:     "myrealm"
-      KEYCLOAK_CLIENT_ID: "bank_chat"
     ports:
       - "8001:8001"
     extra_hosts:
