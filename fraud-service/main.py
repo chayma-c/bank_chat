@@ -189,16 +189,55 @@ async def analyze(
     }
 
 
+from fraud.auth import require_bank_agent, verify_report_signature
+from fastapi.security import HTTPBearer
+
+_bearer_optional = HTTPBearer(auto_error=False)
+
 @app.get("/reports/{filename}")
 async def download_report(
     filename: str,
-    _user: dict = Depends(require_bank_agent)
+    expires: int | None = None,
+    signature: str | None = None,
+    creds = Depends(_bearer_optional)
 ):
+    """
+    Download a report. 
+    Supports two auth modes:
+    1. Bearer Token (standard API access)
+    2. Signed URL (for browser clicks, using 'expires' and 'signature' params)
+    """
+    is_authed = False
+    
+    # Mode 1: Bearer Token
+    if creds:
+        try:
+            await require_bank_agent(creds)
+            is_authed = True
+        except HTTPException:
+            pass
+            
+    # Mode 2: HMAC Signature fallback
+    if not is_authed:
+        if not expires or not signature:
+            raise HTTPException(
+                status_code=401, 
+                detail="Authentication required: Provide a Bearer token or a valid signed URL."
+            )
+        
+        if not verify_report_signature(filename, expires, signature):
+            raise HTTPException(
+                status_code=403, 
+                detail="Access denied: Invalid or expired signature."
+            )
+
     if ".." in filename or "/" in filename or "\\" in filename:
         raise HTTPException(status_code=400, detail="Nom de fichier invalide.")
+    
     filepath = _reports_dir() / filename
     if not filepath.is_file():
         raise HTTPException(status_code=404, detail=f"Rapport non trouvé : {filename}")
+        
     return FileResponse(
         path=str(filepath),
         filename=filename,

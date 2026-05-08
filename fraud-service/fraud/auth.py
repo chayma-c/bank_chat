@@ -32,6 +32,26 @@ _bearer = HTTPBearer(auto_error=False)
 # ── Roles that grant bank-level access ───────────────────────────────────────
 BANK_AGENT_ROLES = frozenset({"bank_agent", "admin"})
 
+# ── HMAC Signing for Reports ──────────────────────────────────────────────────
+import hmac
+import hashlib
+import time
+
+def get_shared_secret() -> str:
+    return os.getenv("DJANGO_SECRET_KEY", "fallback-secret-for-dev")
+
+def generate_report_signature(filename: str, expires: int) -> str:
+    """Generate an HMAC-SHA256 signature for a filename + expiration."""
+    msg = f"{filename}:{expires}".encode()
+    return hmac.new(get_shared_secret().encode(), msg, hashlib.sha256).hexdigest()
+
+def verify_report_signature(filename: str, expires: int, signature: str) -> bool:
+    """Verify the signature and check if it has expired."""
+    if int(expires) < int(time.time()):
+        return False
+    expected = generate_report_signature(filename, expires)
+    return hmac.compare_digest(expected, signature)
+
 
 def _get_public_key() -> str:
     """Fetch and cache the Keycloak realm RSA public key."""

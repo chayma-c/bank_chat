@@ -7,6 +7,7 @@ from langchain_groq import ChatGroq
 from langchain_ollama import ChatOllama
 from langchain_core.messages import SystemMessage, AIMessage, HumanMessage
 from .state import BankChatState
+from ..search_tool import perform_web_search
 
 # ── SETUP ───────────────────────────────────────────────────────────────────
 logger = logging.getLogger(__name__)
@@ -124,7 +125,56 @@ def detect_intent(state: BankChatState) -> BankChatState:
     if intent != "fraud" and any(k in last_msg.lower() for k in ["fraude", "iban", "tracfin", "louche", "suspect"]):
         intent = "fraud"
         
-    return {**state, "intent": intent if intent in ("account", "transfer", "support", "fraud") else "fallback"}
+    valid_intents = ("account", "transfer", "support", "fraud", "search")
+    return {**state, "intent": intent if intent in valid_intents else "fallback"}
+
+def _get_fraud_decision_and_result(messages: list, user_id: str, session_id: str, auth_token: str | None = None) -> tuple:
+    """Unifies ANALYZE vs TALK logic and calling the fraud-service."""
+    last_msg = next((m.content for m in reversed(messages) if m.__class__.__name__ == "HumanMessage"), "")
+
+    prompt = (
+        "You are a Fraud Detection Orchestrator. "
+        "Decide if the user is asking for a deep technical analysis of transactions (ANALYZE) "
+        "or if they are asking a general question about fraud, security, or procedures (TALK).\n\n"
+        "EXAMPLES:\n"
+        "- 'Check this IBAN FR76...' -> ANALYZE\n"
+        "- 'Analyze the transactions for this account' -> ANALYZE\n"
+        "- 'What is phishing?' -> TALK\n"
+        "- 'How do I report a lost card?' -> TALK\n\n"
+        f"User Message: {last_msg}\n\n"
+        "Format your response exactly as follows:\n"
+        "REASONING: <brief explanation>\n"
+        "DECISION: <ANALYZE or TALK>"
+    )
+
+    resp = llm.invoke(prompt).content.upper()
+    reasoning = next((l.split(":", 1)[1].strip() for l in resp.split("\n") if "REASONING:" in l), "Delegated to fraud specialist.")
+    decision = "ANALYZE" if "ANALYZE" in resp else "TALK"
+    prefix = f"💡 *{reasoning}*\n\n---\n\n"
+
+    if decision == "ANALYZE":
+        iban = extract_iban(messages)
+        try:
+            response = httpx.post(
+                f"{FRAUD_SERVICE_URL}/analyze",
+                json={
+                    "message": last_msg,
+                    "iban": iban,
+                    "action": "fraud_check",
+                    "user_id": user_id,
+                    "session_id": session_id,
+                },
+                headers={"Authorization": f"Bearer {auth_token}"} if auth_token else {},
+                timeout=120.0
+            )
+            response.raise_for_status()
+            return prefix, response.json(), True
+        except Exception as e:
+            logger.error(f"Fraud service call failed: {e}")
+            return prefix, {"llm_summary": f"❌ Erreur lors de l'appel au service de fraude: {str(e)}"}, True
+    
+    return prefix, {}, False
+
 
 # ── Nodes ───────────────────────────────────────────────────────────────────
 
@@ -188,7 +238,12 @@ def stream_agent_response(intent: str, state: BankChatState):
             yield f"❌ Error service SQL : {e}", "text2sql_agent"
             return
     else:
-        agent_key = {"account": "account_agent", "transfer": "transfer_agent", "support": "support_agent"}.get(intent, "fallback")
+        agent_key = {
+            "account":  "account_agent",
+            "transfer": "transfer_agent",
+            "support":  "support_agent",
+            "search":   "search_agent"
+        }.get(intent, "fallback")
     
     system = SystemMessage(content=SYSTEM_PROMPTS.get(agent_key, SYSTEM_PROMPTS["fallback"]))
     for chunk in llm.stream([system] + list(messages)):
@@ -217,7 +272,6 @@ def account_agent(state: BankChatState):   return _run_agent(state, "account_age
 def transfer_agent(state: BankChatState):  return _run_agent(state, "transfer_agent")
 def support_agent(state: BankChatState):   return _run_agent(state, "support_agent")
 def handle_fallback(state: BankChatState): return _run_agent(state, "fallback")
-def fraud_agent(state: BankChatState):    return _run_agent(state, "fraud_agent")
 
 def search_agent(state: BankChatState) -> BankChatState:
     last_msg = state["messages"][-1].content
