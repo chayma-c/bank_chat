@@ -1,3 +1,4 @@
+this is a stable version of the code with missing agents restrictions and no email agent
 # 🏦 BankChat — AI-Powered Banking Assistant
 
 An intelligent banking chatbot built with **Angular 21**, **Django 6**, **LangGraph** multi-agent orchestration, **Keycloak** authentication, a dedicated **fraud-detection microservice**, and an **intelligent memory system** (Redis + PostgreSQL).
