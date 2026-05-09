@@ -183,6 +183,8 @@ services:
         condition: service_healthy
       mail-service:
         condition: service_healthy
+      text-to-sql-service:
+        condition: service_healthy
     extra_hosts:
       - "host.docker.internal:host-gateway"
     command: >
@@ -258,6 +260,41 @@ services:
     depends_on:
       api-gateway:
         condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - bank_network
+
+# ══════════════════════════════════════════════════════════════════════
+# 🧠 TEXT-TO-SQL SERVICE (Analyse en langage naturel)
+# ══════════════════════════════════════════════════════════════════════
+  text-to-sql-service:
+    build:
+      context: ./text-to-sql-service
+      dockerfile: Dockerfile
+    container_name: bank_chat_text2sql
+    env_file:
+      - backend/.env
+    environment:
+      TEXT2SQL_PORT: "8003"
+      DATABASE_URL: postgresql://sql_user:sql_password@db:5432/banking_data
+      SQL_MAX_ROWS: "100"
+      SQL_TIMEOUT_MS: "30000"
+      CORS_ORIGINS: "http://localhost:4200,http://localhost,http://localhost:80"
+      KEYCLOAK_URL:       "http://keycloak:8080/auth"
+      KEYCLOAK_REALM:     "myrealm"
+      KEYCLOAK_CLIENT_ID: "bank_chat"
+      KEYCLOAK_ISSUER:    "http://localhost/auth"
+    ports:
+      - "8003:8003"
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8003/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
     restart: unless-stopped
     networks:
       - bank_network

@@ -11,9 +11,10 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-FRAUD_SERVICE_URL = os.getenv("FRAUD_SERVICE_URL", "http://fraud-service:8001")
-MAIL_SERVICE_URL  = os.getenv("MAIL_SERVICE_URL",  "http://mail-service:8002")
-ALERT_EMAIL       = os.getenv("ALERT_EMAIL",        "compliance@yourbank.com")
+FRAUD_SERVICE_URL   = os.getenv("FRAUD_SERVICE_URL",   "http://fraud-service:8001")
+MAIL_SERVICE_URL    = os.getenv("MAIL_SERVICE_URL",    "http://mail-service:8002")
+TEXT2SQL_SERVICE_URL = os.getenv("TEXT2SQL_SERVICE_URL", "http://text-to-sql-service:8003")
+ALERT_EMAIL         = os.getenv("ALERT_EMAIL",          "compliance@yourbank.com")
 
 # ── HELPER : IBAN Extraction ──────────────────────────────────────────────────
 
@@ -179,80 +180,115 @@ def support_agent(state: BankChatState):   return _run_agent(state, "support_age
 def handle_fallback(state: BankChatState): return _run_agent(state, "fallback")
 
 def text_to_sql_agent(state: BankChatState) -> dict:
-    """Text-to-SQL agent node — delegates to the text-to-sql-service microservice."""
+    """
+    Text-to-SQL agent node.
+
+    Delegates to the text-to-sql-service microservice which:
+      1. Converts the NL question to SQL (LLM)
+      2. Validates SQL security (SELECT-only, whitelisted tables)
+      3. Executes against PostgreSQL banking_data
+      4. Returns an explanation + markdown table
+
+    Requires the JWT auth_token from state (bank_agent / admin only).
+    """
+    # Extract the last human message
     last_user_msg = ""
     for msg in reversed(state["messages"]):
-        if hasattr(msg, "type") and msg.type == "human":
-            last_user_msg = msg.content
-            break
         if msg.__class__.__name__ == "HumanMessage":
             last_user_msg = msg.content
             break
 
-    try:
-        decision_resp = llm.invoke(decision_prompt).content
-        lines     = decision_resp.strip().split("\n")
-        reasoning = "Analyse de la requête..."
-        decision  = "TALK"
-        for line in lines:
-            if line.upper().startswith("REASONING:"):
-                reasoning = line.split(":", 1)[1].strip()
-            if line.upper().startswith("DECISION:"):
-                decision = "ANALYZE" if "ANALYZE" in line.upper() else "TALK"
-
-        prefix = f"💡 *{reasoning}*\n\n---\n\n"
-
-        if decision == "ANALYZE":
-            iban = extract_iban(state["messages"])
-            resp = httpx.post(
-                f"{FRAUD_SERVICE_URL}/analyze",
-                json={
-                    "message":    last_msg,
-                    "iban":       iban,
-                    "action":     "fraud_check",
-                    "user_id":    state.get("user_id", "anonymous"),
-                    "session_id": state.get("session_id", ""),
-                    "excel_path": "",
-                },
-                timeout=120.0,
-            )
-            resp.raise_for_status()
-            result = resp.json()
-
-            logger.info(
-                f"[fraud_agent] ANALYZE done — IBAN={result.get('iban')} "
-                f"score={result.get('score_final')} risk={result.get('risk_level')} "
-                f"tracfin={result.get('tracfin_required')}"
-            )
-
-            ai_response = prefix + (
-                result.get("llm_summary") or
-                result.get("summary") or
-                "Analyse terminée."
-            )
-            return {
-                **state,
-                "messages": [AIMessage(content=ai_response)],
-                "agent":    "fraud_agent",
-                "context":  result,   # ← mail_agent lira ce dict
-            }
-        else:
-            system = SystemMessage(content=SYSTEM_PROMPTS["fraud_agent"])
-            resp   = llm.invoke([system] + list(state["messages"]))
-            return {
-                **state,
-                "messages": [AIMessage(content=prefix + resp.content)],
-                "agent":    "fraud_agent",
-                "context":  {},   # pas d'analyse → pas de mail
-            }
-
-    except Exception as e:
-        logger.exception("[fraud_agent] Error")
+    if not last_user_msg.strip():
         return {
             **state,
-            "messages": [AIMessage(content=f"❌ Erreur agent fraude : {str(e)}")],
-            "agent":    "fraud_agent",
-            "context":  {},
+            "messages": [AIMessage(content="❌ Message vide — veuillez poser une question.")],
+            "agent": "text_to_sql_agent",
+            "context": {},
+        }
+
+    try:
+        headers = {}
+        if state.get("auth_token"):
+            headers["Authorization"] = f"Bearer {state['auth_token']}"
+
+        resp = httpx.post(
+            f"{TEXT2SQL_SERVICE_URL}/query",
+            json={
+                "question": last_user_msg,
+                "user_id":  state.get("user_id", "anonymous"),
+            },
+            headers=headers,
+            timeout=90.0,
+        )
+        resp.raise_for_status()
+        result = resp.json()
+
+        status = result.get("status", "error")
+        explanation = result.get("explanation", "")
+        sql = result.get("sql", "")
+
+        if status == "success":
+            row_count = result.get("row_count", 0)
+            duration  = result.get("duration_ms", 0)
+            truncated = result.get("truncated", False)
+
+            # Build the header line
+            header = (
+                f"🧠 **Analyse SQL** — {row_count} résultat(s) "
+                f"en {duration:.0f}ms"
+            )
+            if truncated:
+                header += f" _(limité à {row_count} lignes)_"
+
+            # Show the generated SQL in a collapsible code block
+            sql_block = f"\n\n<details>\n<summary>🔍 Requête SQL générée</summary>\n\n```sql\n{sql}\n```\n\n</details>\n\n"
+
+            ai_content = f"{header}{sql_block}{explanation}"
+
+            logger.info(
+                f"[text_to_sql_agent] ✅ {row_count} rows "
+                f"(truncated={truncated}) in {duration:.0f}ms"
+            )
+        else:
+            # Service returned an error but with 200 status
+            error_msg = result.get("error", "Erreur inconnue.")
+            ai_content = (
+                f"⛔ **Erreur Text-to-SQL**\n\n"
+                f"{explanation or error_msg}"
+            )
+            logger.warning(f"[text_to_sql_agent] Service error: {error_msg}")
+
+        return {
+            **state,
+            "messages": [AIMessage(content=ai_content)],
+            "agent":    "text_to_sql_agent",
+            "context":  result,
+        }
+
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 403:
+            msg = (
+                "🔒 **Accès refusé** — La fonctionnalité Text-to-SQL est "
+                "réservée aux agents et administrateurs de la banque."
+            )
+        elif e.response.status_code == 401:
+            msg = "🔒 **Non authentifié** — Veuillez vous reconnecter."
+        else:
+            msg = f"❌ Erreur service SQL ({e.response.status_code}) : {e.response.text[:200]}"
+        logger.error(f"[text_to_sql_agent] HTTP error: {e}")
+        return {
+            **state,
+            "messages": [AIMessage(content=msg)],
+            "agent": "text_to_sql_agent",
+            "context": {},
+        }
+    except Exception as e:
+        logger.exception("[text_to_sql_agent] Unexpected error")
+        return {
+            **state,
+            "messages": [AIMessage(content=f"❌ Erreur interne Text-to-SQL : {str(e)}")],
+            "agent": "text_to_sql_agent",
+            "context": {},
         }
 
 
@@ -510,7 +546,7 @@ def stream_agent_response(intent: str, messages: list, user_id: str = "anonymous
 
     agent_key = agent_key_map.get(intent, "fallback")
 
-    # ── TEXT TO SQL (inchangé) ─────────────────────────────
+    # ── TEXT TO SQL ────────────────────────────────────────
     if agent_key == "text_to_sql_agent":
         last_user_msg = ""
         for msg in reversed(messages):
@@ -519,18 +555,51 @@ def stream_agent_response(intent: str, messages: list, user_id: str = "anonymous
                 break
 
         try:
+            _headers = {"Authorization": f"Bearer {auth_token}"} if auth_token else {}
             resp = httpx.post(
-                f"{os.getenv('TEXT2SQL_SERVICE_URL', 'http://text-to-sql-service:8003')}/query",
-                json={"question": last_user_msg, "user_id": "anonymous"},
-                timeout=60.0,
+                f"{TEXT2SQL_SERVICE_URL}/query",
+                json={
+                    "question": last_user_msg,
+                    "user_id":  user_id,
+                },
+                headers=_headers,
+                timeout=90.0,
             )
             resp.raise_for_status()
             result = resp.json()
 
-            yield result.get("explanation", "Query executed."), "text2sql_agent"
+            status      = result.get("status", "error")
+            explanation = result.get("explanation", "")
+            sql         = result.get("sql", "")
+            row_count   = result.get("row_count", 0)
+            duration    = result.get("duration_ms", 0)
+            truncated   = result.get("truncated", False)
 
+            if status == "success":
+                header = (
+                    f"🧠 **Analyse SQL** — {row_count} résultat(s) "
+                    f"en {duration:.0f}ms"
+                    + (f" _(limité à {row_count} lignes)_" if truncated else "")
+                )
+                sql_block = (
+                    f"\n\n<details>\n<summary>🔍 Requête SQL générée</summary>"
+                    f"\n\n```sql\n{sql}\n```\n\n</details>\n\n"
+                )
+                yield header + sql_block + explanation, "text_to_sql_agent"
+            else:
+                error_msg = result.get("error", "Erreur inconnue.")
+                yield f"⛔ **Erreur Text-to-SQL**\n\n{explanation or error_msg}", "text_to_sql_agent"
+
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 403:
+                yield (
+                    "🔒 **Accès refusé** — Fonctionnalité réservée aux agents et administrateurs.",
+                    "text_to_sql_agent",
+                )
+            else:
+                yield f"❌ Erreur service SQL ({e.response.status_code})", "text_to_sql_agent"
         except Exception as e:
-            yield f"❌ Erreur service SQL : {str(e)}", "text2sql_agent"
+            yield f"❌ Erreur service SQL : {str(e)}", "text_to_sql_agent"
 
         return
 
