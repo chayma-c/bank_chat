@@ -164,7 +164,7 @@ services:
       KEYCLOAK_URL: http://keycloak:8080/auth
       DJANGO_SETTINGS_MODULE: config.settings
       DEBUG: "True"
-      KEYCLOAK_ISSUER: "http://localhost/auth"   # ← ADD — matches KC_HOSTNAME_URL
+      KEYCLOAK_ISSUER: "http://localhost/auth"
       MAIL_SERVICE_URL: http://mail-service:8002
       ALERT_EMAIL: compliance@yourbank.com
     ports:
@@ -175,7 +175,7 @@ services:
       redis:
         condition: service_healthy
       keycloak:
-        condition: service_started  # ← Changé de service_healthy à service_started
+        condition: service_started
       fraud-service:
         condition: service_healthy
       mail-service:
@@ -210,8 +210,8 @@ services:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
       interval: 15s
       timeout: 5s
-      retries: 3
-      start_period: 60s
+      retries: 5
+      start_period: 90s
     restart: unless-stopped
     networks:
       - bank_network
@@ -232,7 +232,7 @@ services:
       fraud-service:
         condition: service_healthy
       keycloak:
-        condition: service_started  # ← Changé de service_healthy à service_started
+        condition: service_started
     healthcheck:
       test: ["CMD-SHELL", "wget --quiet --tries=1 --spider http://localhost/health || exit 1"]
       interval: 15s
@@ -259,9 +259,9 @@ services:
     networks:
       - bank_network
 
-# ══════════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════════════
 # 📧 MAIL SERVICE
-# ══════════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════════════
   mail-service:
     build:
       context: ./mail-service

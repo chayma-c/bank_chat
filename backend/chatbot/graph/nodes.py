@@ -9,6 +9,10 @@ from langchain_core.messages import SystemMessage, AIMessage, HumanMessage
 from .state import BankChatState
 from ..search_tool import perform_web_search
 
+# MCP Imports
+from mcp import StdioServerParameters
+from langchain_mcp_adapters.tools import load_mcp_tools
+
 # ── SETUP ───────────────────────────────────────────────────────────────────
 logger = logging.getLogger(__name__)
 
@@ -122,8 +126,14 @@ def detect_intent(state: BankChatState) -> BankChatState:
     intent = llm.invoke(prompt).content.strip().lower().split()[0]
     
     # Simple hardcoded overrides for reliability
-    if intent != "fraud" and any(k in last_msg.lower() for k in ["fraude", "iban", "tracfin", "louche", "suspect"]):
+    lower_msg = last_msg.lower()
+    if intent != "fraud" and any(k in lower_msg for k in ["fraude", "iban", "tracfin", "louche", "suspect"]):
         intent = "fraud"
+    
+    # Force search for time-related or exchange rate queries
+    search_keywords = ["cours", "taux", "change", "bourse", "prix", "météo", "actualité", "news", "date", "heure", "qui est", "quand"]
+    if intent != "search" and any(k in lower_msg for k in search_keywords):
+        intent = "search"
         
     valid_intents = ("account", "transfer", "support", "fraud", "search")
     return {**state, "intent": intent if intent in valid_intents else "fallback"}
@@ -275,7 +285,50 @@ def handle_fallback(state: BankChatState): return _run_agent(state, "fallback")
 
 def search_agent(state: BankChatState) -> BankChatState:
     last_msg = state["messages"][-1].content
-    results = perform_web_search(last_msg)
+    
+    # Step 1: Query Optimization (Keyword extraction)
+    optimize_prompt = (
+        "Extract the most relevant search keywords from the following user message to perform a precise web search. "
+        "Focus on entities, dates, and core intent. Return ONLY the keywords, no explanation.\n\n"
+        f"Message: {last_msg}"
+    )
+    optimized_query = llm.invoke(optimize_prompt).content.strip()
+    logger.info(f"[search_agent] Optimized query: {optimized_query}")
+
+    # Step 2: MCP Search Call
+    try:
+        # Determine path to mcp_server.py
+        import sys
+        import os
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        server_script = os.path.join(current_dir, "..", "mcp_server.py")
+        
+        server_params = StdioServerParameters(
+            command=sys.executable,
+            args=[server_script],
+            env=os.environ.copy()
+        )
+        
+        # Load MCP tools (via stdio bridge)
+        logger.info(f"[search_agent] Connecting to MCP server: {server_script}")
+        mcp_tools = load_mcp_tools("stdio", server_params)
+        
+        # Find the web_search tool
+        search_tool = next((t for t in mcp_tools if t.name == "web_search"), None)
+        
+        if search_tool:
+            logger.info(f"[search_agent] Calling MCP tool 'web_search' with query: {optimized_query}")
+            results = search_tool.invoke({"query": optimized_query})
+            logger.info("[search_agent] MCP tool results received successfully.")
+        else:
+            logger.warning("[search_agent] web_search tool not found in MCP server, falling back to legacy tool.")
+            results = perform_web_search(optimized_query)
+            
+    except Exception as e:
+        logger.error(f"[search_agent] MCP call failed: {e}. Falling back to legacy tool.")
+        results = perform_web_search(optimized_query)
+
+    # Step 3: Summarization
     system = SystemMessage(content=SYSTEM_PROMPTS["search_agent"] + f"\n\nSEARCH RESULTS:\n{results}")
     resp = llm.invoke([system] + list(state["messages"]))
     return {**state, "messages": [AIMessage(content=resp.content)], "agent": "search_agent"}
