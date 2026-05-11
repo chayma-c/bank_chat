@@ -253,7 +253,7 @@ class StreamChatView(View):
             fraud_result  = None
 
             try:
-                for token, agent_key, *extra in stream_agent_response(intent, intent_state):
+                for token, agent_key, *extra in stream_agent_response(intent_state):
                     full_response += token
                     agent_used     = agent_key
                     yield f'data: {json.dumps({"token": token, "agent": agent_key})}\n\n'
