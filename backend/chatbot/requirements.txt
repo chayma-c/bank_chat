@@ -7,13 +7,14 @@ psycopg2-binary>=2.9
 # ── LangChain ecosystem — versions épinglées pour compatibilité ───────────────
 # Compatibilité vérifiée : langchain 0.3.x + langgraph 0.2.x
 langchain>=0.3.0,<0.4.0
-langchain-core>=0.3.0,<0.4.0
+langchain-core>=0.3.36,<0.4.0
 langchain-groq>=0.2.0,<0.3.0
 langchain-ollama>=0.2.0,<0.3.0
 langgraph>=0.2.0,<0.3.0
  
-# ── MCP adapters — version flexible car souvent source de conflits ────────────
-langchain-mcp-adapters
+# ── MCP adapters ──────────────────────────────────────────────────────────────
+langchain-mcp-adapters==0.1.14
+mcp>=0.1.0
  
 # ── Cache Redis ───────────────────────────────────────────────────────────────
 django-redis>=5.4.0
@@ -27,4 +28,4 @@ requests>=2.31
 pandas>=2.0
 openpyxl>=3.1
 numpy>=1.26
- 
+duckduckgo-search>=6.0.0

@@ -31,33 +31,19 @@ export const routes: Routes = [
     canActivate: [authGuard, adminGuard],
     children: [
       {
-        path: '',
-        redirectTo: 'fraud-rules',
-        pathMatch: 'full',
-      },
-      {
         path: 'fraud-rules',
         loadComponent: () =>
           import('./fraud-admin/fraud-admin.component').then(m => m.FraudAdminComponent),
-        data: { activeTab: 'rules' },
-
       },
       {
         path: 'decision-logs',
         loadComponent: () =>
-          import('./fraud-admin/decision-logs.component').then(m => m.DecisionLogsComponent),
+          import('./fraud-admin/fraud-admin.component').then(m => m.FraudAdminComponent),
       },
       {
         path: 'model-config',
         loadComponent: () =>
           import('./fraud-admin/fraud-admin.component').then(m => m.FraudAdminComponent),
-        data: { activeTab: 'configs' },
-      },
-      {
-        path: 'fraud-settings',
-        loadComponent: () =>
-          import('./fraud-settings/fraud-settings.component').then(m => m.FraudSettingsComponent),
-        canActivate: [authGuard],
       },
       {
         path: 'users',

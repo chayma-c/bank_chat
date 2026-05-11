@@ -7,7 +7,7 @@ from .nodes import (
     detect_intent, route_to_agent,
     account_agent, transfer_agent, support_agent,
     fraud_agent, handle_fallback, mail_agent,
-    text_to_sql_agent,
+    text_to_sql_agent, search_agent,
 )
 from langchain_core.messages import AIMessage
 
@@ -50,6 +50,7 @@ def create_graph():
     graph.add_node("support_agent",     support_agent)
     graph.add_node("fraud_agent",       fraud_agent)
     graph.add_node("text_to_sql_agent", text_to_sql_agent)
+    graph.add_node("search_agent",      search_agent)
     graph.add_node("mail_agent",        mail_agent)
     graph.add_node("fallback",          handle_fallback)
 
@@ -66,6 +67,7 @@ def create_graph():
             "support_agent":     "support_agent",
             "fraud_agent":       "fraud_agent",
             "text_to_sql_agent": "text_to_sql_agent",
+            "search_agent":      "search_agent",
             "fallback":          "fallback",
         }
     )
@@ -88,6 +90,7 @@ def create_graph():
     graph.add_edge("support_agent",     END)
     graph.add_edge("mail_agent",        END)
     graph.add_edge("text_to_sql_agent", END)
+    graph.add_edge("search_agent",      END)
     graph.add_edge("fallback",          END)
 
     return graph.compile()

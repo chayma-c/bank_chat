@@ -13,7 +13,6 @@ from rest_framework.response import Response
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 
 from .graph.orchestrator import bank_graph
-# ── CORRECTION 1 : mail_agent était absent de cet import ────────────────────
 from .graph.nodes import detect_intent, stream_agent_response, llm, mail_agent
 from .graph.state import BankChatState
 from .models import Conversation, Message
@@ -35,21 +34,6 @@ memory_manager = MemoryManager(llm=llm)
 _RESTRICTED_AGENTS = frozenset({'fraud', 'sql'})
 _BANK_AGENT_ROLES  = frozenset({'bank_agent', 'admin'})
 
-def call_fraud_service(iban: str, action: str, user_id: str,
-                       session_id: str, excel_path: str) -> dict:
-    response = httpx.post(
-        f"{FRAUD_SERVICE_URL}/analyze",
-        json={
-            "iban":       iban,
-            "action":     action,
-            "user_id":    user_id,
-            "session_id": session_id,
-            "excel_path": excel_path,
-        },
-        timeout=120.0,
-    )
-    response.raise_for_status()
-    return response.json()
 
 def _get_realm_roles(request) -> frozenset:
     """
@@ -82,6 +66,8 @@ def _get_realm_roles(request) -> frozenset:
         logger.exception("[_get_realm_roles] Unexpected error during role extraction: %s", e)
         return frozenset()
 
+
+# ── Vues ──────────────────────────────────────────────────────────────────────
 
 class ChatView(APIView):
     """Mode non-streaming — passe par le graph LangGraph complet (mail_agent inclus)."""
@@ -200,16 +186,11 @@ class HealthCheckView(APIView):
 @method_decorator(csrf_exempt, name='dispatch')
 class StreamChatView(View):
     """
-    Mode streaming SSE.
+    Mode streaming — génère les tokens en SSE.
 
-    CORRECTIONS :
-      1. mail_agent importé (manquait)
-      2. stream_agent_response reçoit user_id + session_id
-      3. Déstructuration *extra pour capturer fraud_result (3e élément)
-      4. mail_agent appelé après streaming si fraude ANALYZE détectée
-      5. selected_agent transmis dans le state initial
+    CORRECTION : après une analyse fraude (path ANALYZE), appelle mail_agent
+    directement depuis generate() car stream_agent_response() bypass le graph.
     """
-
     def post(self, request):
         try:
             data = json.loads(request.body)
@@ -222,7 +203,7 @@ class StreamChatView(View):
         user_id        = data.get("user_id", "anonymous")
         session_id     = data.get("session_id", str(uuid.uuid4()))
         message        = data.get("message", "").strip()
-        selected_agent = data.get("selected_agent", data.get("agent", None))
+        selected_agent = data.get("selected_agent", None)
 
         # ── Role check: fraud & SQL agents require bank_agent or admin ──────
         if selected_agent in _RESTRICTED_AGENTS:
@@ -262,77 +243,43 @@ class StreamChatView(View):
             "error":          None,
         }
 
+        # detect_intent retourne un state enrichi avec intent + messages
         intent_state = detect_intent(initial_state)
         intent       = intent_state["intent"]
 
         def generate():
             full_response = ""
             agent_used    = "fallback"
-            fraud_result  = None   # rempli si ANALYZE path fraude
+            fraud_result  = None
 
             try:
-                # ── CORRECTIONS 2 + 3 ────────────────────────────────────────
-                # - user_id et session_id transmis à stream_agent_response
-                # - *extra capturele 3e élément yielded : le dict /analyze
-                for token, agent_key, *extra in stream_agent_response(
-                    intent,
-                    intent_state["messages"],
-                    user_id=user_id,
-                    session_id=session_id,
-                    auth_token=auth_token,
-                ):
+                for token, agent_key, *extra in stream_agent_response(intent, intent_state):
                     full_response += token
                     agent_used     = agent_key
                     yield f'data: {json.dumps({"token": token, "agent": agent_key})}\n\n'
 
-                    # Capturer le résultat fraude brut (3e élément du yield)
-                    if extra and isinstance(extra[0], dict) and extra[0].get("iban"):
+                    # stream_agent_response peut yielder un 3e élément : le résultat fraude brut
+                    if extra and isinstance(extra[0], dict):
                         fraud_result = extra[0]
-                        logger.info(
-                            f"[StreamChatView] fraud_result captured — "
-                            f"IBAN={fraud_result.get('iban')} "
-                            f"score={fraud_result.get('score_final')} "
-                            f"decision_log_id={fraud_result.get('decision_log_id', 'MISSING')!r}"
-                        )
 
-                # ── Sauvegarder en BD ─────────────────────────────────────────
-                Message.objects.create(
-                    conversation=conversation, role="user", content=message
-                )
-                Message.objects.create(
-                    conversation=conversation, role="assistant",
-                    content=full_response, agent_used=agent_used
-                )
+                # ── Sauvegarder les messages ───────────────────────────────────
+                Message.objects.create(conversation=conversation, role="user",      content=message)
+                Message.objects.create(conversation=conversation, role="assistant", content=full_response, agent_used=agent_used)
 
-                # ── CORRECTION 4 : appeler mail_agent ────────────────────────
-                # Le streaming bypass le graph LangGraph entier.
-                # mail_agent doit être appelé manuellement ici avec le
-                # fraud_result (qui contient decision_log_id + scores + IBAN).
+                # ── Déclencher mail_agent si analyse fraude effectuée ──────────
+                # C'est ici que le mail est envoyé en mode streaming,
+                # car stream_agent_response() ne passe PAS par le graph LangGraph.
                 if agent_used == "fraud_agent" and fraud_result and fraud_result.get("iban"):
                     try:
-                        logger.info(
-                            f"[StreamChatView] Triggering mail_agent — "
-                            f"IBAN={fraud_result.get('iban')} "
-                            f"score={fraud_result.get('score_final')}"
-                        )
                         mail_state: BankChatState = {
                             **intent_state,
-                            "context":    fraud_result,
-                            "agent":      "fraud_agent",
-                            "user_id":    user_id,
-                            "session_id": session_id,
-                            "auth_token": auth_token,
+                            "context": fraud_result,
+                            "agent":   "fraud_agent",
                         }
                         mail_agent(mail_state)
-                        logger.info("[StreamChatView] ✅ mail_agent completed")
+                        logger.info(f"[StreamChatView] mail_agent called for IBAN={fraud_result.get('iban')}")
                     except Exception as mail_err:
-                        logger.warning(
-                            f"[StreamChatView] mail_agent failed (non-blocking): {mail_err}"
-                        )
-                elif agent_used == "fraud_agent":
-                    logger.info(
-                        "[StreamChatView] fraud_agent TALK path — mail_agent not called"
-                    )
+                        logger.warning(f"[StreamChatView] mail_agent failed (non-blocking): {mail_err}")
 
                 yield f'data: {json.dumps({"done": True, "session_id": str(session_id), "agent": agent_used})}\n\n'
 
