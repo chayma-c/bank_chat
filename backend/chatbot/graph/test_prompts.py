@@ -164,7 +164,7 @@ if __name__ == "__main__":
             print(f"💬 LLM RESPONSE    :")
             
             # Stream response
-            for token, agent_key in stream_agent_response(actual_intent, messages):
+            for token, agent_key, *extra in stream_agent_response(actual_intent, messages):
                 print(token, end="", flush=True)
             print("\n")
             

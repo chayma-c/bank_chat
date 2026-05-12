@@ -563,15 +563,16 @@ def mail_agent(state: BankChatState) -> BankChatState:
 
 
 
-def stream_agent_response(state: BankChatState):
+def stream_agent_response(
+    intent: str,
+    messages: list,
+    user_id: str = "anonymous",
+    session_id: str = "",
+    auth_token: Optional[str] = None
+):
     """
     Yields (token, agent_key) tuples — or (token, agent_key, fraud_result) pour fraud ANALYZE.
     """
-    intent     = state.get("intent", "fallback")
-    messages   = state.get("messages", [])
-    user_id    = state.get("user_id", "anonymous")
-    session_id = state.get("session_id", "")
-    auth_token = state.get("auth_token")
 
     # ── FRAUD FLOW ─────────────────────────────────────────
     if intent == "fraud":
