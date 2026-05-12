@@ -16,15 +16,17 @@ from pydantic import BaseModel
 from langchain_core.messages import HumanMessage
 
 from fraud.database     import SessionLocal, Base, engine
-from fraud.models       import FraudRuleModel        # noqa: F401
+from fraud.models       import FraudRuleModel ,FraudDecisionLog         # noqa: F401
 from fraud.crud         import seed_default_rules
 from fraud.rule_router import router as rule_router
 from fraud.graph        import run_fraud_agent
-
+from typing import Optional
 import asyncio
 from fraud.db import init_db, get_settings, update_settings
 from fraud.scheduler import scheduler_loop, run_global_analysis_task
 from fraud.auth import require_bank_agent
+from sqlalchemy import desc
+from fraud.mail_log_service import MailLogService
 
 logger = logging.getLogger(__name__)
 
