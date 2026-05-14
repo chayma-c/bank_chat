@@ -116,11 +116,11 @@ services:
       FRAUD_SERVICE_PORT: "8001"
       FRAUD_DB_HOST: db
       FRAUD_DB_NAME: banking_data
-      FRAUD_DB_USER: sql_user
-      FRAUD_DB_PASSWORD: sql_password
+      FRAUD_DB_USER: fraud_user
+      FRAUD_DB_PASSWORD: fraud_password
       FRAUD_DB_PORT: "5432"
       FRAUD_SERVICE_PUBLIC_URL: "http://localhost/fraud"
-      DATABASE_URL: postgresql://sql_user:sql_password@db:5432/banking_data
+      DATABASE_URL: postgresql://fraud_user:fraud_password@db:5432/banking_data
       CORS_ORIGINS: "http://localhost:4200,http://localhost,http://localhost:80"
       KEYCLOAK_ISSUER: "http://localhost/auth"
       KEYCLOAK_URL:       "http://keycloak:8080/auth"

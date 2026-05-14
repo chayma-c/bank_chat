@@ -122,6 +122,9 @@
         LC_CTYPE = 'en_US.utf8'
         TEMPLATE = template0;
 
+    -- ══════════════════════════════════════════════════════════════════════════
+    -- TEXT-TO-SQL USER
+    -- ══════════════════════════════════════════════════════════════════════════
     -- Create dedicated user (READ-ONLY — used by text-to-sql-service)
     CREATE USER sql_user WITH PASSWORD 'sql_password';
 
@@ -140,6 +143,32 @@
     -- Ensure future tables are also SELECT-only for sql_user
     ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO sql_user;
     ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON SEQUENCES TO sql_user;
+
+    -- ══════════════════════════════════════════════════════════════════════════
+    -- FRAUD USER
+    -- ══════════════════════════════════════════════════════════════════════════
+    CREATE USER fraud_user WITH PASSWORD 'fraud_password';
+    GRANT CONNECT ON DATABASE banking_data TO fraud_user;
+
+    \connect banking_data
+
+    GRANT USAGE, CREATE ON SCHEMA public TO fraud_user;
+    GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO fraud_user;
+    GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO fraud_user;
+    GRANT ALL PRIVILEGES ON ALL FUNCTIONS IN SCHEMA public TO fraud_user;
+    
+    ALTER DEFAULT PRIVILEGES IN SCHEMA public
+    GRANT ALL ON TABLES TO fraud_user;
+
+    ALTER DEFAULT PRIVILEGES IN SCHEMA public
+    GRANT ALL ON SEQUENCES TO fraud_user;
+
+    ALTER DEFAULT PRIVILEGES IN SCHEMA public
+    GRANT ALL ON FUNCTIONS TO fraud_user;
+
+    -- ══════════════════════════════════════════════════════════════════════════
+    -- TABLES & VIEWS
+    -- ══════════════════════════════════════════════════════════════════════════
 
     -- Create sample schema for banking data
     CREATE TABLE IF NOT EXISTS transactions (
