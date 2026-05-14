@@ -644,6 +644,7 @@ def stream_agent_response(
         "account": "account_agent",
         "transfer": "transfer_agent",
         "support": "support_agent",
+        "search": "search_agent",
         "text_to_sql": "text_to_sql_agent",
         "sql": "text_to_sql_agent",
     }
@@ -704,6 +705,57 @@ def stream_agent_response(
                 yield f"❌ Erreur service SQL ({e.response.status_code})", "text_to_sql_agent"
         except Exception as e:
             yield f"❌ Erreur service SQL : {str(e)}", "text_to_sql_agent"
+
+        return
+
+    # ── SEARCH AGENT ───────────────────────────────────────
+    if agent_key == "search_agent":
+        last_msg = messages[-1].content
+        yield "💡 *Recherche d'informations en cours...*\n\n---\n\n", "search_agent"
+
+        # Step 1: Query Optimization
+        optimize_prompt = (
+            "Extract the most relevant search keywords from the following user message to perform a precise web search. "
+            "Focus on entities, dates, and core intent. Return ONLY the keywords, no explanation.\n\n"
+            f"Message: {last_msg}"
+        )
+        try:
+            optimized_query = llm.invoke(optimize_prompt).content.strip()
+        except Exception:
+            optimized_query = last_msg
+
+        # Step 2: Search Tool Execution
+        try:
+            import sys
+            current_dir = os.path.dirname(os.path.abspath(__file__))
+            server_script = os.path.join(current_dir, "..", "mcp_server.py")
+            server_params = StdioServerParameters(
+                command=sys.executable,
+                args=[server_script],
+                env=os.environ.copy()
+            )
+            mcp_tools = load_mcp_tools("stdio", server_params)
+            search_tool = next((t for t in mcp_tools if t.name == "web_search"), None)
+            
+            if search_tool:
+                results = search_tool.invoke({"query": optimized_query})
+            else:
+                results = perform_web_search(optimized_query)
+        except Exception as e:
+            logger.error(f"[stream_agent_response] Search tool failed: {e}")
+            try:
+                results = perform_web_search(optimized_query)
+            except Exception:
+                results = "No search results found due to an internal error."
+
+        # Step 3: Stream Summarization
+        system = SystemMessage(content=SYSTEM_PROMPTS["search_agent"] + f"\n\nSEARCH RESULTS:\n{results}")
+        try:
+            for chunk in llm.stream([system] + list(messages)):
+                if chunk.content:
+                    yield chunk.content, "search_agent"
+        except Exception as e:
+            yield f"❌ Error during summarization: {str(e)}", "search_agent"
 
         return
 
