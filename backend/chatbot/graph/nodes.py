@@ -102,43 +102,99 @@ def _get_reasoning(intent: str, last_msg: str) -> str:
 
 # ── INTENT DETECTION ────────────────────────────────────────────────────────
 
+# ── Intent keyword lists ─────────────────────────────────────────────────────
+
+# Keywords that strongly indicate a database / SQL query intent
+_SQL_KEYWORDS = [
+    # Quantitative / aggregation
+    "combien", "total", "nombre", "count", "somme", "moyenne", "montant",
+    "statistique", "rapport", "reporting", "top ", "les 5", "les 10",
+    # DB-query verbs
+    "liste", "affiche", "montre", "donne moi", "trouve", "cherche",
+    "toutes les transactions", "tous les", "toutes les",
+    # Status values that live in the DB (not fraud-reporting actions)
+    "bloquées", "bloqués", "blocked", "failed", "pending", "approved",
+    "rejetées", "rejetés",
+    # Explicit DB / SQL references
+    "base de données", "base", "select", "requête sql",
+    # Domain columns / tables users ask about
+    "score de fraude", "risk_level", "decision", "décision",
+    "règles", "règle", "tracfin", "signalement",
+    "transaction", "transactions", "virement", "paiement",
+]
+
+# Keywords that indicate the user is *reporting* or *asking about* fraud (not querying the DB)
+_FRAUD_KEYWORDS = [
+    "fraude", "frauduleux", "frauduleuse", "phishing", "arnaque",
+    "escroquerie", "hameçonnage", "louche", "suspect", "suspicieux",
+    "pirater", "piraté", "vol", "volé",
+]
+
+# Keywords that force a live web search
+_SEARCH_KEYWORDS = [
+    "cours", "taux de change", "change", "bourse", "prix de",
+    "météo", "actualité", "news", "qui est", "quand a",
+]
+
+
 def detect_intent(state: BankChatState) -> BankChatState:
     selected = state.get("selected_agent")
     if selected and selected not in ("orchestrator", "auto"):
         return {**state, "intent": "text_to_sql" if selected == "sql" else selected}
-        
+
     last_msg = state["messages"][-1].content
+    lower_msg = last_msg.lower()
+
+    # ── Priority 1 : SQL keyword override (before LLM call) ──────────────────
+    # Queries about counts, lists, stats from the DB are unambiguously text_to_sql.
+    if any(k in lower_msg for k in _SQL_KEYWORDS):
+        logger.info(f"[detect_intent] SQL keyword override → text_to_sql")
+        return {**state, "intent": "text_to_sql"}
+
+    # ── Priority 2 : LLM classification ──────────────────────────────────────
     prompt = (
-        "Classify the banking user's intent based on the following categories:\n"
-        "- account: Balance inquiry, IBAN request, account status, RIB.\n"
-        "- transfer: Sending money, wire transfers, recurring payments, RIB management.\n"
-        "- support: Lost card, mobile app issues, password reset, generic help.\n"
-        "- fraud: Suspicious transactions, fraudulent emails, reporting scams, auditing an IBAN.\n"
-        "- search: General info not in bank DB, market trends, exchange rates, latest financial news.\n"
-        "- fallback: Anything else, greetings, off-topic questions.\n\n"
+        "Classify the banking user's intent into ONE of these categories:\n"
+        "- account      : Balance, IBAN request, account status, RIB.\n"
+        "- transfer     : Sending money, wire transfers, recurring payments.\n"
+        "- support      : Lost card, mobile app issues, password reset, generic help.\n"
+        "- fraud: Reporting fraudulent emails, reporting scams, auditing an IBAN ,phishing, scam, stolen card.\n"
+        "- text_to_sql  : Questions that require querying the banking database — counts, "
+        "statistics, lists of transactions, blocked/failed payments, fraud scores, rules, "
+        "reports. The answer comes from a SQL query, not from a conversation.\n"
+        "- search       : General info not in bank DB, market trends, exchange rates, news.\n"
+        "- fallback     : Greetings, off-topic, anything else.\n\n"
         "EXAMPLES:\n"
         "'Quel est mon solde ?' -> account\n"
         "'Je veux envoyer 100€ à Ali' -> transfer\n"
         "'Ma carte est bloquée' -> support\n"
         "'Cet IBAN est-il suspect ?' -> fraud\n"
+        "'Signaler un phishing' -> fraud\n"
+        "'Analyser l\'IBAN XXXX est-il suspect?' -> fraud\n"
+        "'Analyser les transactions frauduleuses' -> fraud\n"
+        "'Combien de transactions au total ?' -> text_to_sql\n"
+        "'Trouve les transactions bloquées' -> text_to_sql\n"
+        "'Quel est le score de fraude moyen ?' -> text_to_sql\n"
+        "'Quelles règles AML sont actives ?' -> text_to_sql\n"
         "'Bonjour' -> fallback\n\n"
         f"Message: {last_msg}\n"
         "Classification (one word only):"
     )
     intent = llm.invoke(prompt).content.strip().lower().split()[0]
-    
-    # Simple hardcoded overrides for reliability
-    lower_msg = last_msg.lower()
-    if intent != "fraud" and any(k in lower_msg for k in ["fraude", "iban", "tracfin", "louche", "suspect"]):
+
+    # ── Priority 3 : Fraud keyword override (explicit fraud-reporting terms only) ──
+    if intent not in ("fraud", "text_to_sql") and any(k in lower_msg for k in _FRAUD_KEYWORDS):
         intent = "fraud"
-    
-    # Force search for time-related or exchange rate queries
-    search_keywords = ["cours", "taux", "change", "bourse", "prix", "météo", "actualité", "news", "date", "heure", "qui est", "quand"]
-    if intent != "search" and any(k in lower_msg for k in search_keywords):
+        logger.info(f"[detect_intent] Fraud keyword override → fraud")
+
+    # ── Priority 4 : Search override ──────────────────────────────────────────
+    if intent not in ("search", "text_to_sql", "fraud") and any(k in lower_msg for k in _SEARCH_KEYWORDS):
         intent = "search"
-        
-    valid_intents = ("account", "transfer", "support", "fraud", "search")
-    return {**state, "intent": intent if intent in valid_intents else "fallback"}
+        logger.info(f"[detect_intent] Search keyword override → search")
+
+    valid_intents = ("account", "transfer", "support", "fraud", "search", "text_to_sql")
+    resolved = intent if intent in valid_intents else "fallback"
+    logger.info(f"[detect_intent] '{last_msg[:60]}' → {resolved}")
+    return {**state, "intent": resolved}
 
 def _get_fraud_decision_and_result(messages: list, user_id: str, session_id: str, auth_token: str | None = None) -> tuple:
     """Unifies ANALYZE vs TALK logic and calling the fraud-service."""
@@ -696,11 +752,14 @@ def stream_agent_response(state: BankChatState):
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 403:
                 yield (
-                    "🔒 **Accès refusé** — Fonctionnalité réservée aux agents et administrateurs.",
+                    "🔒 **Accès refusé** — La fonctionnalité Text-to-SQL est "
+                    "réservée aux agents et administrateurs de la banque.",
                     "text_to_sql_agent",
                 )
+            elif e.response.status_code == 401:
+                yield "🔒 **Non authentifié** — Veuillez vous reconnecter.", "text_to_sql_agent"
             else:
-                yield f"❌ Erreur service SQL ({e.response.status_code})", "text_to_sql_agent"
+                yield f"❌ Erreur service SQL ({e.response.status_code}) : {e.response.text[:100]}", "text_to_sql_agent"
         except Exception as e:
             yield f"❌ Erreur service SQL : {str(e)}", "text_to_sql_agent"
 

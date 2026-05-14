@@ -59,14 +59,54 @@ def _get_public_key() -> str:
     return _public_key_cache
 
 
-def _decode_token(token: str) -> dict:
-    """Decode and fully verify a Keycloak RS256 JWT."""
+'''def _decode_token(token: str) -> dict:
+    """
+    Decode and fully verify a Keycloak RS256 JWT.
+
+    Security model:
+      - RS256 signature is verified against Keycloak's RSA public key  ← the real proof
+      - Token expiry is enforced
+      - Audience check is skipped (Keycloak tokens may omit client_id in 'aud')
+      - Issuer check is skipped to avoid internal/public URL mismatches:
+          Internal Docker URL : http://keycloak:8080/auth/realms/myrealm
+          Public URL          : http://localhost/auth/realms/myrealm
+        Both are our trusted Keycloak; the signature check already proves this.
+    """
     key = _get_public_key()
+    
+    # Decode without verification first to see what algorithms are supported
+    try:
+        header = jwt.get_unverified_header(token)
+        logger.info(f"JWT HEADER = {header}")
+        logger.info(f"Token algorithm: {header.get('alg')}")
+    except Exception as e:
+        logger.warning(f"Could not decode token without verification: {e}")
+    
+    # Now decode with full verification but relaxed aud/iss checks
+    return jwt.decode(
+        token,
+        key,
+        algorithms=["RS256"],
+        options={
+            "verify_signature": True,
+            "verify_exp": True,
+            "verify_aud": False,  # aud may not contain client_id
+            "verify_iss": False,  # internal vs public KC URL — signature is the proof
+        },
+    )
+'''
+def _decode_token(token: str) -> dict:
+    key = _get_public_key()
+
     issuer = (
         f"{KEYCLOAK_ISSUER}/realms/{KEYCLOAK_REALM}"
         if KEYCLOAK_ISSUER
         else f"{KEYCLOAK_URL}/realms/{KEYCLOAK_REALM}"
     )
+
+    header = jwt.get_unverified_header(token)
+    logger.info(f"JWT HEADER = {header}")
+
     return jwt.decode(
         token,
         key,
@@ -75,7 +115,6 @@ def _decode_token(token: str) -> dict:
         issuer=issuer,
         options={"verify_exp": True},
     )
-
 
 def _extract_roles(payload: dict) -> frozenset:
     return frozenset(payload.get("realm_access", {}).get("roles", []))
@@ -98,6 +137,8 @@ async def require_bank_agent(
         401 — missing / expired / invalid token
         403 — valid token but insufficient role (e.g. client role)
     """
+    logger.info(f"AUTH CREDS = {creds}")
+
     if creds is None:
         raise HTTPException(
             status_code=401,
@@ -107,8 +148,10 @@ async def require_bank_agent(
     try:
         payload = _decode_token(creds.credentials)
     except jwt.ExpiredSignatureError:
+        logger.warning("Token has expired")
         raise HTTPException(status_code=401, detail="Token has expired.")
     except jwt.InvalidTokenError as exc:
+        logger.warning(f"Invalid token: {exc}")
         raise HTTPException(status_code=401, detail=f"Invalid token: {exc}")
     except RuntimeError as exc:
         logger.error("Text-to-SQL service JWT setup error: %s", exc)
@@ -117,7 +160,7 @@ async def require_bank_agent(
             detail="Authentication service temporarily unavailable.",
         )
     except Exception as exc:
-        logger.warning("Unexpected JWT validation error: %s", exc)
+        logger.exception("Unexpected JWT validation error")
         raise HTTPException(status_code=401, detail="Could not validate credentials.")
 
     roles = _extract_roles(payload)

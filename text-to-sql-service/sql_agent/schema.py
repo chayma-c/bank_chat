@@ -15,6 +15,30 @@ ALLOWED_TABLES = frozenset({
     "fraud_decision_logs",
 })
 
+# ── Column whitelist per table (used for SELECT * rewriting + hallucination check)
+ALLOWED_COLUMNS: dict[str, list[str]] = {
+    "transactions": [
+        "id", "transaction_id", "user_id", "amount", "currency",
+        "transaction_type", "status", "fraud_score", "is_fraudulent",
+        "merchant_name", "merchant_category", "created_at", "updated_at",
+    ],
+    "fraud_rules": [
+        "id", "name", "domain", "trigger", "trigger_detail",
+        "points", "severity", "active", "description",
+        "created_at", "updated_at",
+    ],
+    "fraud_decision_logs": [
+        "id", "created_at", "user_id", "session_id", "iban",
+        "transactions_count", "date_range",
+        "score_behavioral", "score_aml", "score_final",
+        "risk_level", "tracfin_required",
+        "rules_triggered", "rules_evaluated", "triggered_rules_detail",
+        "report_path", "download_url",
+        "mail_sent", "mail_recipient", "mail_template", "mail_status", "mail_id",
+        "llm_summary", "error",
+    ],
+}
+
 # ── Full schema description for the LLM prompt ────────────────────────────────
 # Each table entry has: description, columns (name, type, description)
 

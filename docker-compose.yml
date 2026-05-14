@@ -164,10 +164,11 @@ services:
       DB_PORT: "5432"
       REDIS_URL: redis://redis:6379/0
       FRAUD_SERVICE_URL: http://fraud-service:8001
+      TEXT2SQL_SERVICE_URL: http://text-to-sql-service:8003
       KEYCLOAK_URL: http://keycloak:8080/auth
       DJANGO_SETTINGS_MODULE: config.settings
       DEBUG: "True"
-      KEYCLOAK_ISSUER: "http://localhost/auth"
+      KEYCLOAK_ISSUER: "http://localhost/auth"   # matches KC_HOSTNAME_URL (public URL)
       MAIL_SERVICE_URL: http://mail-service:8002
       ALERT_EMAIL: compliance@yourbank.com
     ports:
@@ -178,7 +179,7 @@ services:
       redis:
         condition: service_healthy
       keycloak:
-        condition: service_started
+        condition: service_started  # ← Changé de service_healthy à service_started
       fraud-service:
         condition: service_healthy
       mail-service:
@@ -215,8 +216,8 @@ services:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
       interval: 15s
       timeout: 5s
-      retries: 5
-      start_period: 90s
+      retries: 3
+      start_period: 60s
     restart: unless-stopped
     networks:
       - bank_network
@@ -236,6 +237,8 @@ services:
         condition: service_healthy
       fraud-service:
         condition: service_healthy
+      text-to-sql-service:
+        condition: service_healthy
       keycloak:
         condition: service_started
     healthcheck:
@@ -243,6 +246,7 @@ services:
       interval: 15s
       timeout: 5s
       retries: 3
+      start_period: 30s  # give nginx time to fully initialize
     restart: unless-stopped
     networks:
       - bank_network
@@ -259,7 +263,7 @@ services:
       - "4200:80"
     depends_on:
       api-gateway:
-        condition: service_healthy
+        condition: service_started   # relaxed: don't block on gateway health
     restart: unless-stopped
     networks:
       - bank_network
@@ -301,7 +305,7 @@ services:
 
 # ══════════════════════════════════════════════════════════════════════
 # 📧 MAIL SERVICE
-# ══════════════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════════
   mail-service:
     build:
       context: ./mail-service
