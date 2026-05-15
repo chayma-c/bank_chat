@@ -91,14 +91,14 @@ class ChatView(APIView):
     authentication_classes = [KeycloakAuthentication]
     permission_classes     = [IsAuthenticated]
 
-    def post(self, request):
+    async def post(self, request):
+        from asgiref.sync import sync_to_async
         data           = request.data
         user_id        = data.get("user_id", "anonymous")
         session_id     = data.get("session_id", str(uuid.uuid4()))
         message        = data.get("message")
         selected_agent = data.get("selected_agent", None)
 
-        # ── Role check: fraud & SQL agents require bank_agent or admin ──────
         if selected_agent in _RESTRICTED_AGENTS:
             user_roles = (
                 set(request.user.get('roles', []))
@@ -113,12 +113,12 @@ class ChatView(APIView):
         if not message:
             return Response({"error": "message requis"}, status=400)
 
-        conversation, _ = Conversation.objects.get_or_create(
+        conversation, _ = await sync_to_async(Conversation.objects.get_or_create)(
             session_id=session_id,
             defaults={"user_id": user_id}
         )
 
-        conversation_messages = memory_manager.build_context(conversation, message)
+        conversation_messages = await memory_manager.build_context(conversation, message)
 
         auth_header = request.headers.get("Authorization")
         auth_token = auth_header.split(" ")[1] if auth_header and "Bearer " in auth_header else None
@@ -136,12 +136,12 @@ class ChatView(APIView):
         }
 
         try:
-            result      = bank_graph.invoke(initial_state)
+            result      = await bank_graph.ainvoke(initial_state)
             ai_response = result["messages"][-1].content
             agent_used  = result.get("agent", "unknown")
 
-            Message.objects.create(conversation=conversation, role="user",      content=message)
-            Message.objects.create(conversation=conversation, role="assistant", content=ai_response, agent_used=agent_used)
+            await sync_to_async(Message.objects.create)(conversation=conversation, role="user", content=message)
+            await sync_to_async(Message.objects.create)(conversation=conversation, role="assistant", content=ai_response, agent_used=agent_used)
 
             return Response({
                 "session_id": str(session_id),
@@ -213,7 +213,8 @@ class StreamChatView(View):
       5. selected_agent transmis dans le state initial
     """
 
-    def post(self, request):
+    async def post(self, request):
+        from asgiref.sync import sync_to_async
         try:
             data = json.loads(request.body)
         except json.JSONDecodeError:
@@ -227,11 +228,10 @@ class StreamChatView(View):
         message        = data.get("message", "").strip()
         selected_agent = data.get("selected_agent", data.get("agent", None))
 
-        # ── Role check: fraud & SQL agents require bank_agent or admin ──────
         if selected_agent in _RESTRICTED_AGENTS:
-            user_roles = _get_realm_roles(request)
+            user_roles = await sync_to_async(_get_realm_roles)(request)
             if not (user_roles & _BANK_AGENT_ROLES):
-                def _forbidden():
+                async def _forbidden():
                     yield f'data: {json.dumps({"error": "Accès refusé : rôle bank_agent ou admin requis pour cet agent."})}\n\n'
                 return StreamingHttpResponse(
                     _forbidden(), content_type='text/event-stream', status=403
@@ -243,12 +243,12 @@ class StreamChatView(View):
                 content_type='text/event-stream', status=400
             )
 
-        conversation, _ = Conversation.objects.get_or_create(
+        conversation, _ = await sync_to_async(Conversation.objects.get_or_create)(
             session_id=session_id,
             defaults={"user_id": user_id}
         )
 
-        conversation_messages = memory_manager.build_context(conversation, message)
+        conversation_messages = await memory_manager.build_context(conversation, message)
 
         auth_header = request.headers.get("Authorization")
         auth_token = auth_header.split(" ")[1] if auth_header and "Bearer " in auth_header else None
@@ -265,19 +265,16 @@ class StreamChatView(View):
             "error":          None,
         }
 
-        intent_state = detect_intent(initial_state)
+        intent_state = await detect_intent(initial_state)
         intent       = intent_state["intent"]
 
-        def generate():
+        async def generate():
             full_response = ""
             agent_used    = "fallback"
-            fraud_result  = None   # rempli si ANALYZE path fraude
+            fraud_result  = None
 
             try:
-                # ── CORRECTIONS 2 + 3 ────────────────────────────────────────
-                # - user_id et session_id transmis à stream_agent_response
-                # - *extra capturele 3e élément yielded : le dict /analyze
-                for token, agent_key, *extra in stream_agent_response(
+                async for token, agent_key, *extra in stream_agent_response(
                     intent,
                     intent_state["messages"],
                     user_id=user_id,
@@ -288,36 +285,19 @@ class StreamChatView(View):
                     agent_used     = agent_key
                     yield f'data: {json.dumps({"token": token, "agent": agent_key})}\n\n'
 
-                    # Capturer le résultat fraude brut (3e élément du yield)
                     if extra and isinstance(extra[0], dict) and extra[0].get("iban"):
                         fraud_result = extra[0]
-                        logger.info(
-                            f"[StreamChatView] fraud_result captured — "
-                            f"IBAN={fraud_result.get('iban')} "
-                            f"score={fraud_result.get('score_final')} "
-                            f"decision_log_id={fraud_result.get('decision_log_id', 'MISSING')!r}"
-                        )
 
-                # ── Sauvegarder en BD ─────────────────────────────────────────
-                Message.objects.create(
+                await sync_to_async(Message.objects.create)(
                     conversation=conversation, role="user", content=message
                 )
-                Message.objects.create(
+                await sync_to_async(Message.objects.create)(
                     conversation=conversation, role="assistant",
                     content=full_response, agent_used=agent_used
                 )
 
-                # ── CORRECTION 4 : appeler mail_agent ────────────────────────
-                # Le streaming bypass le graph LangGraph entier.
-                # mail_agent doit être appelé manuellement ici avec le
-                # fraud_result (qui contient decision_log_id + scores + IBAN).
                 if agent_used == "fraud_agent" and fraud_result and fraud_result.get("iban"):
                     try:
-                        logger.info(
-                            f"[StreamChatView] Triggering mail_agent — "
-                            f"IBAN={fraud_result.get('iban')} "
-                            f"score={fraud_result.get('score_final')}"
-                        )
                         mail_state: BankChatState = {
                             **intent_state,
                             "context":    fraud_result,
@@ -326,16 +306,12 @@ class StreamChatView(View):
                             "session_id": session_id,
                             "auth_token": auth_token,
                         }
-                        mail_agent(mail_state)
+                        await mail_agent(mail_state)
                         logger.info("[StreamChatView] ✅ mail_agent completed")
                     except Exception as mail_err:
                         logger.warning(
-                            f"[StreamChatView] mail_agent failed (non-blocking): {mail_err}"
+                            f"[StreamChatView] mail_agent failed: {mail_err}"
                         )
-                elif agent_used == "fraud_agent":
-                    logger.info(
-                        "[StreamChatView] fraud_agent TALK path — mail_agent not called"
-                    )
 
                 yield f'data: {json.dumps({"done": True, "session_id": str(session_id), "agent": agent_used})}\n\n'
 
@@ -362,7 +338,7 @@ class FraudAnalyzeView(APIView):
     authentication_classes = [KeycloakAuthentication]
     permission_classes     = [IsAuthenticated, IsBankAgent]
 
-    def post(self, request):
+    async def post(self, request):
         data       = request.data
         iban       = data.get("iban", "")
         action     = data.get("action", "fraud_check")
@@ -381,18 +357,19 @@ class FraudAnalyzeView(APIView):
             # Assuming nodes.py _get_fraud_decision_and_result can be adapted or this uses direct httpx
             # For simplicity, keeping the logic direct here if it was removed from helpers
             headers = {"Authorization": request.headers.get("Authorization")}
-            resp = httpx.post(
-                f"{FRAUD_SERVICE_URL}/analyze",
-                json={
-                    "iban":       iban,
-                    "action":     action,
-                    "user_id":    user_id,
-                    "session_id": session_id,
-                    "excel_path": excel_path,
-                },
-                headers=headers,
-                timeout=120.0
-            )
+            async with httpx.AsyncClient() as client:
+                resp = await client.post(
+                    f"{FRAUD_SERVICE_URL}/analyze",
+                    json={
+                        "iban":       iban,
+                        "action":     action,
+                        "user_id":    user_id,
+                        "session_id": session_id,
+                        "excel_path": excel_path,
+                    },
+                    headers=headers,
+                    timeout=120.0
+                )
             resp.raise_for_status()
             return Response(resp.json())
 

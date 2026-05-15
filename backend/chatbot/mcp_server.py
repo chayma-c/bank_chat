@@ -8,6 +8,7 @@ logger = logging.getLogger("mcp_search_server")
 
 # Initialisation du serveur MCP
 mcp = FastMCP("BankChat Search")
+print("🚀 MCP Server starting...", flush=True)
 
 @mcp.tool()
 def web_search(query: str, max_results: int = 5) -> str:
@@ -22,7 +23,7 @@ def web_search(query: str, max_results: int = 5) -> str:
             if not results:
                 return "Aucun résultat trouvé sur le web."
             
-            formatted_results = []
+            formatted_results = ["(via MCP)"]
             for i, r in enumerate(results, 1):
                 title = r.get("title", "Sans titre")
                 snippet = r.get("body", "Pas de description.")

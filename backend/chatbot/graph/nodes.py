@@ -9,9 +9,9 @@ from langchain_core.messages import SystemMessage, AIMessage, HumanMessage
 from .state import BankChatState
 from ..search_tool import perform_web_search
 from typing import Optional
+from asgiref.sync import sync_to_async
 
 # MCP Imports
-from mcp import StdioServerParameters
 from langchain_mcp_adapters.tools import load_mcp_tools
 
 # ── SETUP ───────────────────────────────────────────────────────────────────
@@ -68,8 +68,9 @@ SYSTEM_PROMPTS = {
         "Maintain confidentiality."
     ) + BASE_POLICY,
     "search_agent": (
-        "You are BankChat's Research Assistant. Summarize web search results clearly. "
-        "Cite sources using URLs."
+        "You are BankChat's Research Assistant. Your goal is to provide a comprehensive answer based on the provided SEARCH RESULTS. "
+        "Do not just list websites; extract the actual information (like weather, rates, news) and summarize it. "
+        "Cite your sources using URLs at the end of each relevant section."
     ) + BASE_POLICY,
     "reasoning_prompt": (
         "Explain in ONE short sentence what you are about to do based on the intent. "
@@ -88,14 +89,14 @@ You are a banking compliance mail agent. respond with ONLY a valid JSON object.
 
 # ── SHARED LOGIC ────────────────────────────────────────────────────────────
 
-def _get_reasoning(intent: str, last_msg: str) -> str:
+async def _get_reasoning(intent: str, last_msg: str) -> str:
     """Unified Thinking output for all agents."""
     if intent == "fallback": return ""
     try:
-        resp = llm.invoke([
+        resp = (await llm.ainvoke([
             SystemMessage(content=SYSTEM_PROMPTS["reasoning_prompt"]),
             HumanMessage(content=f"Intent: {intent}\nMessage: {last_msg}")
-        ]).content.strip()
+        ])).content.strip()
         return f"💡 *{resp}*\n\n---\n\n"
     except Exception:
         return "💡 *Traitement de votre demande...*\n\n---\n\n"
@@ -134,10 +135,11 @@ _FRAUD_KEYWORDS = [
 _SEARCH_KEYWORDS = [
     "cours", "taux de change", "change", "bourse", "prix de",
     "météo", "actualité", "news", "qui est", "quand a",
+    "weather", "température", "climat",
 ]
 
 
-def detect_intent(state: BankChatState) -> BankChatState:
+async def detect_intent(state: BankChatState) -> BankChatState:
     selected = state.get("selected_agent")
     if selected and selected not in ("orchestrator", "auto"):
         return {**state, "intent": "text_to_sql" if selected == "sql" else selected}
@@ -146,7 +148,8 @@ def detect_intent(state: BankChatState) -> BankChatState:
     lower_msg = last_msg.lower()
 
     # ── Priority 1 : SQL keyword override (before LLM call) ──────────────────
-    # Queries about counts, lists, stats from the DB are unambiguously text_to_sql.
+    # If a user explicitly asks for "cherche mes transactions", it should go to SQL if Auto.
+    # However, we skip this if they explicitly selected "search".
     if any(k in lower_msg for k in _SQL_KEYWORDS):
         logger.info(f"[detect_intent] SQL keyword override → text_to_sql")
         return {**state, "intent": "text_to_sql"}
@@ -179,7 +182,13 @@ def detect_intent(state: BankChatState) -> BankChatState:
         f"Message: {last_msg}\n"
         "Classification (one word only):"
     )
-    intent = llm.invoke(prompt).content.strip().lower().split()[0]
+    try:
+        resp = await llm.ainvoke(prompt)
+        intent = resp.content.strip().lower().split()[0]
+        logger.info(f"[detect_intent] LLM classified intent as: {intent}")
+    except Exception as e:
+        logger.error(f"[detect_intent] LLM intent detection failed: {e}")
+        intent = "fallback"
 
     # ── Priority 3 : Fraud keyword override (explicit fraud-reporting terms only) ──
     if intent not in ("fraud", "text_to_sql") and any(k in lower_msg for k in _FRAUD_KEYWORDS):
@@ -196,7 +205,7 @@ def detect_intent(state: BankChatState) -> BankChatState:
     logger.info(f"[detect_intent] '{last_msg[:60]}' → {resolved}")
     return {**state, "intent": resolved}
 
-def _get_fraud_decision_and_result(messages: list, user_id: str, session_id: str, auth_token: str | None = None) -> tuple:
+async def _get_fraud_decision_and_result(messages: list, user_id: str, session_id: str, auth_token: str | None = None) -> tuple:
     """Unifies ANALYZE vs TALK logic and calling the fraud-service."""
     last_msg = next((m.content for m in reversed(messages) if m.__class__.__name__ == "HumanMessage"), "")
 
@@ -215,7 +224,7 @@ def _get_fraud_decision_and_result(messages: list, user_id: str, session_id: str
         "DECISION: <ANALYZE or TALK>"
     )
 
-    resp = llm.invoke(prompt).content.upper()
+    resp = (await llm.ainvoke(prompt)).content.upper()
     reasoning = next((l.split(":", 1)[1].strip() for l in resp.split("\n") if "REASONING:" in l), "Delegated to fraud specialist.")
     decision = "ANALYZE" if "ANALYZE" in resp else "TALK"
     prefix = f"💡 *{reasoning}*\n\n---\n\n"
@@ -223,20 +232,21 @@ def _get_fraud_decision_and_result(messages: list, user_id: str, session_id: str
     if decision == "ANALYZE":
         iban = extract_iban(messages)
         try:
-            response = httpx.post(
-                f"{FRAUD_SERVICE_URL}/analyze",
-                json={
-                    "message": last_msg,
-                    "iban": iban,
-                    "action": "fraud_check",
-                    "user_id": user_id,
-                    "session_id": session_id,
-                },
-                headers={"Authorization": f"Bearer {auth_token}"} if auth_token else {},
-                timeout=120.0
-            )
-            response.raise_for_status()
-            return prefix, response.json(), True
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    f"{FRAUD_SERVICE_URL}/analyze",
+                    json={
+                        "message": last_msg,
+                        "iban": iban,
+                        "action": "fraud_check",
+                        "user_id": user_id,
+                        "session_id": session_id,
+                    },
+                    headers={"Authorization": f"Bearer {auth_token}"} if auth_token else {},
+                    timeout=120.0
+                )
+                response.raise_for_status()
+                return prefix, response.json(), True
         except Exception as e:
             logger.error(f"Fraud service call failed: {e}")
             return prefix, {"llm_summary": f"❌ Erreur lors de l'appel au service de fraude: {str(e)}"}, True
@@ -246,15 +256,15 @@ def _get_fraud_decision_and_result(messages: list, user_id: str, session_id: str
 
 # ── Nodes ───────────────────────────────────────────────────────────────────
 
-def fraud_agent(state: BankChatState) -> BankChatState:
+async def fraud_agent(state: BankChatState) -> BankChatState:
     try:
-        prefix, result, is_analyze = _get_fraud_decision_and_result(
+        prefix, result, is_analyze = await _get_fraud_decision_and_result(
             state["messages"], state["user_id"], state["session_id"], state.get("auth_token")
         )
         if is_analyze:
             return {**state, "messages": [AIMessage(content=prefix + result.get("llm_summary", ""))], "agent": "fraud_agent", "context": result}
         
-        resp = llm.invoke([SystemMessage(content=SYSTEM_PROMPTS["fraud_agent"])] + list(state["messages"]))
+        resp = await llm.ainvoke([SystemMessage(content=SYSTEM_PROMPTS["fraud_agent"])] + list(state["messages"]))
         return {**state, "messages": [AIMessage(content=prefix + resp.content)], "agent": "fraud_agent", "context": {}}
     except Exception as e:
         logger.exception("Fraud agent error")
@@ -273,17 +283,17 @@ def route_to_agent(state: BankChatState) -> str:
         "text_to_sql": "text_to_sql_agent",
     }.get(state["intent"], "fallback")
 
-def _run_agent(state: BankChatState, agent_key: str) -> BankChatState:
+async def _run_agent(state: BankChatState, agent_key: str) -> BankChatState:
     system = SystemMessage(content=SYSTEM_PROMPTS.get(agent_key, SYSTEM_PROMPTS["fallback"]))
-    resp = llm.invoke([system] + list(state["messages"]))
+    resp = await llm.ainvoke([system] + list(state["messages"]))
     return {**state, "messages": [AIMessage(content=resp.content)], "agent": agent_key}
 
-def account_agent(state: BankChatState):   return _run_agent(state, "account_agent")
-def transfer_agent(state: BankChatState):  return _run_agent(state, "transfer_agent")
-def support_agent(state: BankChatState):   return _run_agent(state, "support_agent")
-def handle_fallback(state: BankChatState): return _run_agent(state, "fallback")
+async def account_agent(state: BankChatState):   return await _run_agent(state, "account_agent")
+async def transfer_agent(state: BankChatState):  return await _run_agent(state, "transfer_agent")
+async def support_agent(state: BankChatState):   return await _run_agent(state, "support_agent")
+async def handle_fallback(state: BankChatState): return await _run_agent(state, "fallback")
 
-def search_agent(state: BankChatState) -> BankChatState:
+async def search_agent(state: BankChatState) -> BankChatState:
     last_msg = state["messages"][-1].content
     
     # Step 1: Query Optimization (Keyword extraction)
@@ -292,12 +302,15 @@ def search_agent(state: BankChatState) -> BankChatState:
         "Focus on entities, dates, and core intent. Return ONLY the keywords, no explanation.\n\n"
         f"Message: {last_msg}"
     )
-    optimized_query = llm.invoke(optimize_prompt).content.strip()
+    try:
+        resp = await llm.ainvoke(optimize_prompt)
+        optimized_query = resp.content.strip()
+    except Exception:
+        optimized_query = last_msg
     logger.info(f"[search_agent] Optimized query: {optimized_query}")
 
     # Step 2: MCP Search Call
     try:
-        # Determine path to mcp_server.py
         import sys
         import os
         current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -309,16 +322,24 @@ def search_agent(state: BankChatState) -> BankChatState:
             env=os.environ.copy()
         )
         
-        # Load MCP tools (via stdio bridge)
+        # Load MCP tools (via stdio bridge) - PROPERLY AWAITING
         logger.info(f"[search_agent] Connecting to MCP server: {server_script}")
-        mcp_tools = load_mcp_tools("stdio", server_params)
+        mcp_tools = await load_mcp_tools(
+            None,
+            connection={
+                "transport": "stdio",
+                "command": sys.executable,
+                "args": [server_script],
+                "env": os.environ.copy()
+            }
+        )
         
         # Find the web_search tool
         search_tool = next((t for t in mcp_tools if t.name == "web_search"), None)
         
         if search_tool:
             logger.info(f"[search_agent] Calling MCP tool 'web_search' with query: {optimized_query}")
-            results = search_tool.invoke({"query": optimized_query})
+            results = await search_tool.ainvoke({"query": optimized_query})
             logger.info("[search_agent] MCP tool results received successfully.")
         else:
             logger.warning("[search_agent] web_search tool not found in MCP server, falling back to legacy tool.")
@@ -330,12 +351,12 @@ def search_agent(state: BankChatState) -> BankChatState:
 
     # Step 3: Summarization
     system = SystemMessage(content=SYSTEM_PROMPTS["search_agent"] + f"\n\nSEARCH RESULTS:\n{results}")
-    resp = llm.invoke([system] + list(state["messages"]))
+    resp = await llm.ainvoke([system] + list(state["messages"]))
     return {**state, "messages": [AIMessage(content=resp.content)], "agent": "search_agent"}
 
-def text_to_sql_agent(state: BankChatState) -> dict:
+async def text_to_sql_agent(state: BankChatState) -> dict:
     """
-    Text-to-SQL agent node.
+    Text-to-SQL agent node. (async)
 
     Delegates to the text-to-sql-service microservice which:
       1. Converts the NL question to SQL (LLM)
@@ -365,17 +386,18 @@ def text_to_sql_agent(state: BankChatState) -> dict:
         if state.get("auth_token"):
             headers["Authorization"] = f"Bearer {state['auth_token']}"
 
-        resp = httpx.post(
-            f"{TEXT2SQL_SERVICE_URL}/query",
-            json={
-                "question": last_user_msg,
-                "user_id":  state.get("user_id", "anonymous"),
-            },
-            headers=headers,
-            timeout=90.0,
-        )
-        resp.raise_for_status()
-        result = resp.json()
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                f"{TEXT2SQL_SERVICE_URL}/query",
+                json={
+                    "question": last_user_msg,
+                    "user_id":  state.get("user_id", "anonymous"),
+                },
+                headers=headers,
+                timeout=90.0,
+            )
+            resp.raise_for_status()
+            result = resp.json()
 
         status = result.get("status", "error")
         explanation = result.get("explanation", "")
@@ -463,15 +485,15 @@ def _extract_json(text: str) -> dict | None:
         return None
 
 
-def call_mail_service(payload: dict) -> dict:
+async def call_mail_service(payload: dict) -> dict:
     """
-    POST payload to mail-service /send.
-    Returns the JSON response dict, or {"status": "error", "detail": ...} on failure.
+    POST payload to mail-service /send (Async).
     """
     try:
-        resp = httpx.post(f"{MAIL_SERVICE_URL}/send", json=payload, timeout=15.0)
-        resp.raise_for_status()
-        return resp.json()
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(f"{MAIL_SERVICE_URL}/send", json=payload, timeout=15.0)
+            resp.raise_for_status()
+            return resp.json()
     except httpx.HTTPStatusError as exc:
         logger.error(f"[call_mail_service] HTTP {exc.response.status_code}: {exc.response.text[:200]}")
         return {"status": "error", "detail": str(exc)}
@@ -482,7 +504,7 @@ def call_mail_service(payload: dict) -> dict:
 
 # ── Mail agent (agentique hybride) ────────────────────────────────────────────
 
-def mail_agent(state: BankChatState) -> BankChatState:
+async def mail_agent(state: BankChatState) -> BankChatState:
     """
     Nœud agentique mail hybride :
       1. Décision DÉTERMINISTE sur seuils (score/TRACFIN) — fiable, sans LLM
@@ -536,7 +558,7 @@ def mail_agent(state: BankChatState) -> BankChatState:
     }, ensure_ascii=False)
 
     try:
-        llm_resp = llm.invoke([
+        llm_resp = await llm.ainvoke([
             SystemMessage(content=MAIL_AGENT_SYSTEM),
             HumanMessage(content=f"Fraud analysis result:\n{context_for_llm}"),
         ])
@@ -546,11 +568,6 @@ def mail_agent(state: BankChatState) -> BankChatState:
             template     = parsed.get("template", template)
             mail_context = parsed.get("context", mail_context)
             logger.info(f"[mail_agent] LLM composed — template={template} subject={subject}")
-        else:
-            logger.warning(
-                f"[mail_agent] LLM returned unparseable content, using fallback. "
-                f"Raw (200): {llm_resp.content[:200]}"
-            )
     except Exception as e:
         logger.warning(f"[mail_agent] LLM composition failed, using fallback: {e}")
 
@@ -570,8 +587,7 @@ def mail_agent(state: BankChatState) -> BankChatState:
         "user_id":         state.get("user_id", "anonymous"),
     }
 
-    logger.info(f"[mail_agent] → Calling mail-service: to={ALERT_EMAIL} subject={subject}")
-    result = call_mail_service(payload)
+    result = await call_mail_service(payload)
     status = result.get("status", "error")
 
     if status == "sent":
@@ -586,18 +602,19 @@ def mail_agent(state: BankChatState) -> BankChatState:
     if decision_log_id:
         try:
             _auth_headers = {"Authorization": f"Bearer {state.get('auth_token')}"} if state.get("auth_token") else {}
-            patch_resp = httpx.patch(
-                f"{FRAUD_SERVICE_URL}/decision-logs/{decision_log_id}/mail",
-                json={
-                    "mail_sent":      status == "sent",
-                    "mail_recipient": ALERT_EMAIL,
-                    "mail_template":  template,
-                    "mail_status":    status,
-                    "mail_id":        result.get("id"),
-                },
-                headers=_auth_headers,
-                timeout=5.0,
-            )
+            async with httpx.AsyncClient() as client:
+                await client.patch(
+                    f"{FRAUD_SERVICE_URL}/decision-logs/{decision_log_id}/mail",
+                    json={
+                        "mail_sent":      status == "sent",
+                        "mail_recipient": ALERT_EMAIL,
+                        "mail_template":  template,
+                        "mail_status":    status,
+                        "mail_id":        result.get("id"),
+                    },
+                    headers=_auth_headers,
+                    timeout=5.0,
+                )
             patch_resp.raise_for_status()
             logger.info(f"[mail_agent] ✅ Decision log {decision_log_id} updated with mail info")
         except Exception as e:
@@ -619,7 +636,7 @@ def mail_agent(state: BankChatState) -> BankChatState:
 
 
 
-def stream_agent_response(
+async def stream_agent_response(
     intent: str,
     messages: list,
     user_id: str = "anonymous",
@@ -627,7 +644,7 @@ def stream_agent_response(
     auth_token: Optional[str] = None
 ):
     """
-    Yields (token, agent_key) tuples — or (token, agent_key, fraud_result) pour fraud ANALYZE.
+    Yields (token, agent_key) tuples (Async Generator).
     """
 
     # ── FRAUD FLOW ─────────────────────────────────────────
@@ -646,7 +663,7 @@ def stream_agent_response(
         )
 
         try:
-            decision_resp = llm.invoke(decision_prompt).content
+            decision_resp = (await llm.ainvoke(decision_prompt)).content
             lines = decision_resp.strip().split("\n")
 
             reasoning = "Analyse de la requête..."
@@ -664,35 +681,33 @@ def stream_agent_response(
                 iban = extract_iban(messages)
 
                 _headers = {"Authorization": f"Bearer {auth_token}"} if auth_token else {}
-                resp = httpx.post(
-                    f"{FRAUD_SERVICE_URL}/analyze",
-                    json={
-                        "message": last_msg,
-                        "iban": iban,
-                        "action": "fraud_check",
-                        "user_id": user_id,
-                        "session_id": session_id,
-                        "excel_path": "",
-                    },
-                    headers=_headers,
-                    timeout=120.0,
-                )
+                async with httpx.AsyncClient() as client:
+                    resp = await client.post(
+                        f"{FRAUD_SERVICE_URL}/analyze",
+                        json={
+                            "message": last_msg,
+                            "iban": iban,
+                            "action": "fraud_check",
+                            "user_id": user_id,
+                            "session_id": session_id,
+                            "excel_path": "",
+                        },
+                        headers=_headers,
+                        timeout=120.0,
+                    )
                 resp.raise_for_status()
 
                 result = resp.json()
                 summary = result.get("llm_summary", "Analyse terminée.")
 
                 yield summary, "fraud_agent", result
-
             else:
                 system = SystemMessage(content=SYSTEM_PROMPTS["fraud_agent"])
-                for chunk in llm.stream([system] + list(messages)):
+                async for chunk in llm.astream([system] + list(messages)):
                     if chunk.content:
                         yield chunk.content, "fraud_agent"
-
         except Exception as e:
             yield f"❌ Erreur : {str(e)}", "fraud_agent"
-
         return
 
     # ── OTHER AGENTS ───────────────────────────────────────
@@ -704,7 +719,6 @@ def stream_agent_response(
         "text_to_sql": "text_to_sql_agent",
         "sql": "text_to_sql_agent",
     }
-
     agent_key = agent_key_map.get(intent, "fallback")
 
     # ── TEXT TO SQL ────────────────────────────────────────
@@ -716,19 +730,17 @@ def stream_agent_response(
                 break
 
         try:
-            _headers = {"Authorization": f"Bearer {auth_token}"} if auth_token else {}
-            resp = httpx.post(
-                f"{TEXT2SQL_SERVICE_URL}/query",
-                json={
-                    "question": last_user_msg,
-                    "user_id":  user_id,
-                },
-                headers=_headers,
-                timeout=90.0,
-            )
-            resp.raise_for_status()
-            result = resp.json()
-
+            headers = {"Authorization": f"Bearer {auth_token}"} if auth_token else {}
+            async with httpx.AsyncClient() as client:
+                resp = await client.post(
+                    f"{TEXT2SQL_SERVICE_URL}/query",
+                    json={"question": last_msg, "user_id": user_id},
+                    headers=headers,
+                    timeout=90.0
+                )
+                resp.raise_for_status()
+                result = resp.json()
+            
             status      = result.get("status", "error")
             explanation = result.get("explanation", "")
             sql         = result.get("sql", "")
@@ -764,7 +776,6 @@ def stream_agent_response(
                 yield f"❌ Erreur service SQL ({e.response.status_code}) : {e.response.text[:100]}", "text_to_sql_agent"
         except Exception as e:
             yield f"❌ Erreur service SQL : {str(e)}", "text_to_sql_agent"
-
         return
 
     # ── SEARCH AGENT ───────────────────────────────────────
@@ -779,7 +790,8 @@ def stream_agent_response(
             f"Message: {last_msg}"
         )
         try:
-            optimized_query = llm.invoke(optimize_prompt).content.strip()
+            resp = await llm.ainvoke(optimize_prompt)
+            optimized_query = resp.content.strip()
         except Exception:
             optimized_query = last_msg
 
@@ -788,44 +800,43 @@ def stream_agent_response(
             import sys
             current_dir = os.path.dirname(os.path.abspath(__file__))
             server_script = os.path.join(current_dir, "..", "mcp_server.py")
-            server_params = StdioServerParameters(
-                command=sys.executable,
-                args=[server_script],
-                env=os.environ.copy()
+            logger.info(f"[stream_agent_response] Connecting to MCP server for search: {server_script}")
+            
+            # Signature correct for langchain-mcp-adapters 0.1.x
+            mcp_tools = await load_mcp_tools(
+                None, 
+                connection={
+                    "transport": "stdio",
+                    "command": sys.executable,
+                    "args": [server_script],
+                    "env": os.environ.copy()
+                }
             )
-            mcp_tools = load_mcp_tools("stdio", server_params)
             search_tool = next((t for t in mcp_tools if t.name == "web_search"), None)
             
             if search_tool:
-                results = search_tool.invoke({"query": optimized_query})
+                logger.info(f"[stream_agent_response] Calling MCP tool 'web_search' with query: {optimized_query}")
+                results = await search_tool.ainvoke({"query": optimized_query})
+                logger.info("[stream_agent_response] MCP search successful.")
             else:
-                results = perform_web_search(optimized_query)
+                logger.warning("[stream_agent_response] MCP tool not found, falling back.")
+                results = await sync_to_async(perform_web_search)(optimized_query)
         except Exception as e:
-            logger.error(f"[stream_agent_response] Search tool failed: {e}")
-            try:
-                results = perform_web_search(optimized_query)
-            except Exception:
-                results = "No search results found due to an internal error."
+            logger.error(f"[stream_agent_response] MCP search failed: {e}")
+            results = await sync_to_async(perform_web_search)(optimized_query)
 
-        # Step 3: Stream Summarization
-        system = SystemMessage(content=SYSTEM_PROMPTS["search_agent"] + f"\n\nSEARCH RESULTS:\n{results}")
-        try:
-            for chunk in llm.stream([system] + list(messages)):
-                if chunk.content:
-                    yield chunk.content, "search_agent"
-        except Exception as e:
-            yield f"❌ Error during summarization: {str(e)}", "search_agent"
-
+        system = SystemMessage(content=SYSTEM_PROMPTS["search_agent"] + f"\n\nRESULTS:\n{results}")
+        async for chunk in llm.astream([system] + list(messages)):
+            if chunk.content:
+                yield chunk.content, "search_agent"
         return
 
-    # ── NORMAL STREAM ──────────────────────────────────────
+    # ── FALLBACK / OTHERS ──────────────────────────────────
     system = SystemMessage(content=SYSTEM_PROMPTS.get(agent_key, SYSTEM_PROMPTS["fallback"]))
-
     try:
-        for chunk in llm.stream([system] + list(messages)):
+        async for chunk in llm.astream([system] + list(messages)):
             if chunk.content:
                 yield chunk.content, agent_key
-
     except Exception as e:
         logger.exception("[stream_agent_response] Error")
         yield f"❌ Error: {str(e)}", agent_key
