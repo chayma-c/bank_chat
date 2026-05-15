@@ -1,3 +1,4 @@
+import asyncio
 import json
 import uuid
 import logging
@@ -319,7 +320,21 @@ class StreamChatView(View):
                 logger.exception("StreamChatView generate() error")
                 yield f'data: {json.dumps({"error": str(e)})}\n\n'
 
-        response = StreamingHttpResponse(generate(), content_type='text/event-stream')
+        def sync_generate():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            gen = generate()
+            try:
+                while True:
+                    try:
+                        # Yield each chunk by running the async generator's __anext__ in the loop
+                        yield loop.run_until_complete(gen.__anext__())
+                    except StopAsyncIteration:
+                        break
+            finally:
+                loop.close()
+
+        response = StreamingHttpResponse(sync_generate(), content_type='text/event-stream')
         response['Cache-Control']               = 'no-cache'
         response['X-Accel-Buffering']           = 'no'
         response['Access-Control-Allow-Origin'] = 'http://localhost:4200'

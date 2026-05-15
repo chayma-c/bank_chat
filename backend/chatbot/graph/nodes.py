@@ -14,6 +14,10 @@ from asgiref.sync import sync_to_async
 
 # MCP Imports
 from langchain_mcp_adapters.tools import load_mcp_tools
+from langgraph.prebuilt import create_react_agent
+
+# Local Imports
+from .prompts import BASE_POLICY, SYSTEM_PROMPTS, MAIL_AGENT_SYSTEM, ADVANCED_RESEARCH_PROMPT
 
 # ── SETUP ───────────────────────────────────────────────────────────────────
 logger = logging.getLogger(__name__)
@@ -51,43 +55,36 @@ def get_llm():
     return ChatGroq(model=model, api_key=api_key, temperature=0.7)
 
 llm = get_llm()
+# Prompts are now imported from .prompts
 
-# ── PROMPTS ─────────────────────────────────────────────────────────────────
-
-BASE_POLICY = (
-    "\n\nMatch answer length to complexity. Start with a direct answer. "
-    "Use bullets for steps. Keep under 350 words. Prioritize readability."
-)
-
-SYSTEM_PROMPTS = {
-    "account_agent": "You are BankChat, an account specialist." + BASE_POLICY,
-    "transfer_agent": "You are BankChat, a transfer specialist." + BASE_POLICY,
-    "support_agent": "You are BankChat, a support specialist." + BASE_POLICY,
-    "fallback": "You are BankChat, a professional AI banking assistant." + BASE_POLICY,
-    "fraud_agent": (
-        "You are BankChat's Senior Fraud Officer. Provide professional, secure advice. "
-        "Maintain confidentiality."
-    ) + BASE_POLICY,
-    "search_agent": (
-        "You are BankChat's Research Assistant. Your task is to provide a comprehensive and DIRECT answer based on the provided SEARCH RESULTS. "
-        "DO NOT use your internal knowledge to say you don't know if the information is in the results. "
-        "Extract specific data points (like temperatures, exchange rates, or news headlines) and summarize them for the user. "
-        "Always cite your sources with URLs."
-    ) + BASE_POLICY,
-    "reasoning_prompt": (
-        "Explain in ONE short sentence what you are about to do based on the intent. "
-        "Start with 'I am going to...' or 'the user wants me to...' or 'I will...'. Be professional."
+async def get_research_agent():
+    """Returns a ReAct agent configured with the MCP search tool."""
+    import sys
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    server_script = os.path.join(current_dir, "..", "mcp_server.py")
+    
+    # Load MCP tools
+    mcp_tools = await load_mcp_tools(
+        None, 
+        connection={
+            "transport": "stdio",
+            "command": sys.executable,
+            "args": [server_script],
+            "env": os.environ.copy()
+        }
     )
-}
-
-MAIL_AGENT_SYSTEM = """\
-You are a banking compliance mail agent. respond with ONLY a valid JSON object.
-{
-  "subject": "French subject line",
-  "template": "fraud_alert" | "critical_alert",
-  "context": { ... }
-}
-"""
+    
+    # Filter for the search tool
+    search_tool = next((t for t in mcp_tools if t.name == "web_search"), None)
+    if not search_tool:
+        return None
+        
+    # Create the ReAct agent
+    return create_react_agent(
+        llm, 
+        tools=[search_tool], 
+        state_modifier=ADVANCED_RESEARCH_PROMPT
+    )
 
 # ── SHARED LOGIC ────────────────────────────────────────────────────────────
 
@@ -296,64 +293,36 @@ async def support_agent(state: BankChatState):   return await _run_agent(state, 
 async def handle_fallback(state: BankChatState): return await _run_agent(state, "fallback")
 
 async def search_agent(state: BankChatState) -> BankChatState:
-    last_msg = state["messages"][-1].content
-    
-    # Step 1: Query Optimization (Keyword extraction)
-    optimize_prompt = (
-        "Extract the most relevant search keywords from the following user message to perform a precise web search. "
-        "Focus on entities, dates, and core intent. Return ONLY the keywords, no explanation.\n\n"
-        f"Message: {last_msg}"
-    )
-    try:
-        resp = await llm.ainvoke(optimize_prompt)
-        optimized_query = resp.content.strip()
-    except Exception:
-        optimized_query = last_msg
-    
-    if not optimized_query or len(optimized_query) < 2:
-        optimized_query = last_msg
-        
-    logger.info(f"[search_agent] Optimized query for search: {optimized_query}")
+    messages = state["messages"]
+    last_msg = messages[-1].content
+    logger.info(f"[search_agent] Starting autonomous research for: {last_msg}")
 
-    # Step 2: MCP Search Call
+    # Step 1: Run Autonomous Research Agent
     try:
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        server_script = os.path.join(current_dir, "..", "mcp_server.py")
-        
-        server_params = StdioServerParameters(
-            command=sys.executable,
-            args=[server_script],
-            env=os.environ.copy()
-        )
-        
-        # Load MCP tools (via stdio bridge) - PROPERLY AWAITING
-        mcp_tools = await load_mcp_tools(
-            None,
-            connection={
-                "transport": "stdio",
-                "command": sys.executable,
-                "args": [server_script],
-                "env": os.environ.copy()
-            }
-        )
-        
-        # Find the web_search tool
-        search_tool = next((t for t in mcp_tools if t.name == "web_search"), None)
-        
-        if search_tool:
-            results = await search_tool.ainvoke({"query": optimized_query})
+        agent = await get_research_agent()
+        if agent:
+            # We pass the full message history to give the agent context
+            result = await agent.ainvoke({"messages": messages})
+            # Extract final answer from the last message in the returned state
+            final_answer = result["messages"][-1].content
         else:
-            logger.warning("[search_agent] web_search tool not found in MCP server, falling back to legacy tool.")
-            results = perform_web_search(optimized_query)
+            logger.warning("[search_agent] Autonomous agent not initialized, falling back.")
+            results = perform_web_search(last_msg)
+            final_answer = (await llm.ainvoke([
+                SystemMessage(content=SYSTEM_PROMPTS["search_agent"] + f"\n\nRESULTS:\n{results}"),
+                HumanMessage(content=last_msg)
+            ])).content
             
     except Exception as e:
-        logger.error(f"[search_agent] MCP call failed: {e}. Falling back to legacy tool.")
-        results = perform_web_search(optimized_query)
+        logger.error(f"[search_agent] Autonomous research failed: {e}")
+        # Fallback to legacy single-pass
+        results = perform_web_search(last_msg)
+        final_answer = (await llm.ainvoke([
+            SystemMessage(content=SYSTEM_PROMPTS["search_agent"] + f"\n\nRESULTS:\n{results}"),
+            HumanMessage(content=last_msg)
+        ])).content
 
-    # Step 3: Summarization
-    system = SystemMessage(content=SYSTEM_PROMPTS["search_agent"] + f"\n\nSEARCH RESULTS:\n{results}")
-    resp = await llm.ainvoke([system] + list(state["messages"]))
-    return {**state, "messages": [AIMessage(content=resp.content)], "agent": "search_agent"}
+    return {**state, "messages": messages + [AIMessage(content=final_answer)]}
 
 async def text_to_sql_agent(state: BankChatState) -> dict:
     """
@@ -647,14 +616,14 @@ async def stream_agent_response(
     """
     Yields (token, agent_key) tuples (Async Generator).
     """
+    last_msg = ""
+    for msg in reversed(messages):
+        if msg.__class__.__name__ == "HumanMessage":
+            last_msg = msg.content
+            break
 
     # ── FRAUD FLOW ─────────────────────────────────────────
     if intent == "fraud":
-        last_msg = ""
-        for msg in reversed(messages):
-            if msg.__class__.__name__ == "HumanMessage":
-                last_msg = msg.content
-                break
 
         decision_prompt = (
             "You are a fraud detection reasoning engine. "
@@ -781,57 +750,42 @@ async def stream_agent_response(
 
     # ── SEARCH AGENT ───────────────────────────────────────
     if agent_key == "search_agent":
-        last_msg = messages[-1].content
-        yield "💡 *Recherche d'informations en cours...*\n\n---\n\n", "search_agent"
-
-        # Step 1: Query Optimization
-        optimize_prompt = (
-            "Extract the most relevant search keywords from the following user message to perform a precise web search. "
-            "Focus on entities, dates, and core intent. Return ONLY the keywords, no explanation.\n\n"
-            f"Message: {last_msg}"
-        )
+        logger.info(f"[stream_agent_response] Starting autonomous streaming research for: {last_msg}")
         try:
-            resp = await llm.ainvoke(optimize_prompt)
-            optimized_query = resp.content.strip()
-        except Exception:
-            optimized_query = last_msg
-        
-        if not optimized_query or len(optimized_query) < 2:
-            optimized_query = last_msg
-        
-        logger.info(f"[stream_agent_response] Using query for search: {optimized_query}")
+            agent = await get_research_agent()
+            if not agent:
+                raise Exception("Could not initialize research agent")
 
-        # Step 2: Search Tool Execution
-        try:
-            current_dir = os.path.dirname(os.path.abspath(__file__))
-            server_script = os.path.join(current_dir, "..", "mcp_server.py")
-            
-            # Signature correct for langchain-mcp-adapters 0.1.x
-            mcp_tools = await load_mcp_tools(
-                None, 
-                connection={
-                    "transport": "stdio",
-                    "command": sys.executable,
-                    "args": [server_script],
-                    "env": os.environ.copy()
-                }
-            )
-            search_tool = next((t for t in mcp_tools if t.name == "web_search"), None)
-            
-            if search_tool:
-                results = await search_tool.ainvoke({"query": optimized_query})
-            else:
-                logger.warning("[stream_agent_response] MCP tool not found, falling back.")
-                results = await sync_to_async(perform_web_search)(optimized_query)
+            # Use astream_events to capture tokens AND tool calls
+            async for event in agent.astream_events({"messages": list(messages)}, version="v2"):
+                kind = event["event"]
+                
+                # 1. Handle tokens from the LLM
+                if kind == "on_chat_model_stream":
+                    content = event["data"]["chunk"].content
+                    if content:
+                        yield content, "search_agent"
+                
+                # 2. Handle tool starts (show progress to user)
+                elif kind == "on_tool_start":
+                    tool_name = event["name"]
+                    tool_input = event["data"].get("input", {}).get("query", "...")
+                    if tool_name == "web_search":
+                        yield f"\n\n> 🔍 **Recherche: {tool_input}**\n\n", "search_agent"
+                    else:
+                        yield f"\n\n> 🛠️ **Action: {tool_name}**\n\n", "search_agent"
+
+            return
+
         except Exception as e:
-            logger.error(f"[stream_agent_response] MCP search failed: {e}")
-            results = await sync_to_async(perform_web_search)(optimized_query)
-
-        system = SystemMessage(content=SYSTEM_PROMPTS["search_agent"] + f"\n\nRESULTS:\n{results}")
-        async for chunk in llm.astream([system] + list(messages)):
-            if chunk.content:
-                yield chunk.content, "search_agent"
-        return
+            logger.error(f"[stream_agent_response] Autonomous stream failed: {e}")
+            # Fallback to single-pass search
+            results = await sync_to_async(perform_web_search)(last_msg)
+            system = SystemMessage(content=SYSTEM_PROMPTS["search_agent"] + f"\n\nRESULTS:\n{results}")
+            async for chunk in llm.astream([system] + list(messages)):
+                if chunk.content:
+                    yield chunk.content, "search_agent"
+            return
 
     # ── FALLBACK / OTHERS ──────────────────────────────────
     system = SystemMessage(content=SYSTEM_PROMPTS.get(agent_key, SYSTEM_PROMPTS["fallback"]))
