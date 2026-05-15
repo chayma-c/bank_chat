@@ -9,8 +9,8 @@ def get_db_connection():
     return psycopg2.connect(
         host=os.getenv("FRAUD_DB_HOST", "db"),
         database=os.getenv("FRAUD_DB_NAME", "banking_data"),
-        user=os.getenv("FRAUD_DB_USER", "sql_user"),
-        password=os.getenv("FRAUD_DB_PASSWORD", "sql_password"),
+        user=os.getenv("FRAUD_DB_USER", "fraud_user"),
+        password=os.getenv("FRAUD_DB_PASSWORD", "fraud_password"),
         port=os.getenv("FRAUD_DB_PORT", "5432")
     )
 

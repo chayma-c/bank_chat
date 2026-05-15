@@ -35,6 +35,23 @@ _RESTRICTED_AGENTS = frozenset({'fraud', 'sql'})
 _BANK_AGENT_ROLES  = frozenset({'bank_agent', 'admin'})
 
 
+def call_fraud_service(iban: str, action: str, user_id: str,
+                       session_id: str, excel_path: str) -> dict:
+    response = httpx.post(
+        f"{FRAUD_SERVICE_URL}/analyze",
+        json={
+            "iban":       iban,
+            "action":     action,
+            "user_id":    user_id,
+            "session_id": session_id,
+            "excel_path": excel_path,
+        },
+        timeout=120.0,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
 def _get_realm_roles(request) -> frozenset:
     """
     Extract realm roles from the Bearer JWT for non-DRF views.

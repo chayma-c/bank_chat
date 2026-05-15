@@ -32,6 +32,7 @@ from sql_agent.executor  import execute_query
 from sql_agent.explainer import build_response
 from sql_agent.schema    import get_schema_dict
 
+
 # ── Logging ───────────────────────────────────────────────────────────────────
 logging.basicConfig(
     level=logging.INFO,
@@ -110,6 +111,7 @@ class QueryResponse(BaseModel):
     rows:        list[dict]
     row_count:   int
     truncated:   bool
+    warnings:    list[str]    # Non-blocking notices (SELECT * rewrite, auto-LIMIT, etc.)
     user_id:     str
     duration_ms: float
     status:      str          # "success" | "error"
@@ -176,12 +178,13 @@ async def query_endpoint(
         return QueryResponse(
             question=req.question, sql=sql, explanation=error_msg,
             summary=validation.error, table="", columns=[], rows=[],
-            row_count=0, truncated=False, user_id=user_sub,
-            duration_ms=round(duration_ms, 1), status="error",
-            error=validation.error,
+            row_count=0, truncated=False, warnings=[],
+            user_id=user_sub, duration_ms=round(duration_ms, 1),
+            status="error", error=validation.error,
         )
 
-    clean_sql = validation.cleaned_sql
+    clean_sql  = validation.cleaned_sql
+    val_warnings = validation.warnings  # e.g. SELECT * rewrite, auto-LIMIT
 
     # ── Step 3 : Execute query ────────────────────────────────────────────────
     exec_result = execute_query(clean_sql)
@@ -196,9 +199,9 @@ async def query_endpoint(
         return QueryResponse(
             question=req.question, sql=clean_sql, explanation=error_msg,
             summary=exec_result["error"], table="", columns=[], rows=[],
-            row_count=0, truncated=False, user_id=user_sub,
-            duration_ms=round(duration_ms, 1), status="error",
-            error=exec_result["error"],
+            row_count=0, truncated=False, warnings=val_warnings,
+            user_id=user_sub, duration_ms=round(duration_ms, 1),
+            status="error", error=exec_result["error"],
         )
 
     # ── Step 4 : Format & explain results ────────────────────────────────────
@@ -211,6 +214,12 @@ async def query_endpoint(
     )
 
     duration_ms = (time.perf_counter() - start) * 1000
+
+    # Prepend any validator warnings to the explanation
+    warning_block = ""
+    if val_warnings:
+        warning_block = "\n".join(val_warnings) + "\n\n"
+
     logger.info(
         f"[/query] ✅ Done — {exec_result['row_count']} rows "
         f"in {duration_ms:.0f}ms (user={user_sub!r})"
@@ -219,13 +228,14 @@ async def query_endpoint(
     return QueryResponse(
         question    = req.question,
         sql         = clean_sql,
-        explanation = formatted["explanation"],
+        explanation = warning_block + formatted["explanation"],
         summary     = formatted["summary"],
         table       = formatted["table"],
         columns     = formatted["columns"],
         rows        = exec_result["rows"],
         row_count   = exec_result["row_count"],
         truncated   = exec_result["truncated"],
+        warnings    = val_warnings,
         user_id     = user_sub,
         duration_ms = round(duration_ms, 1),
         status      = "success",
