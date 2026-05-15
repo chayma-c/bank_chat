@@ -1,4 +1,5 @@
 import os
+import sys
 import re
 import httpx
 import json
@@ -68,9 +69,10 @@ SYSTEM_PROMPTS = {
         "Maintain confidentiality."
     ) + BASE_POLICY,
     "search_agent": (
-        "You are BankChat's Research Assistant. Your goal is to provide a comprehensive answer based on the provided SEARCH RESULTS. "
-        "Do not just list websites; extract the actual information (like weather, rates, news) and summarize it. "
-        "Cite your sources using URLs at the end of each relevant section."
+        "You are BankChat's Research Assistant. Your task is to provide a comprehensive and DIRECT answer based on the provided SEARCH RESULTS. "
+        "DO NOT use your internal knowledge to say you don't know if the information is in the results. "
+        "Extract specific data points (like temperatures, exchange rates, or news headlines) and summarize them for the user. "
+        "Always cite your sources with URLs."
     ) + BASE_POLICY,
     "reasoning_prompt": (
         "Explain in ONE short sentence what you are about to do based on the intent. "
@@ -307,12 +309,14 @@ async def search_agent(state: BankChatState) -> BankChatState:
         optimized_query = resp.content.strip()
     except Exception:
         optimized_query = last_msg
-    logger.info(f"[search_agent] Optimized query: {optimized_query}")
+    
+    if not optimized_query or len(optimized_query) < 2:
+        optimized_query = last_msg
+        
+    logger.info(f"[search_agent] Optimized query for search: {optimized_query}")
 
     # Step 2: MCP Search Call
     try:
-        import sys
-        import os
         current_dir = os.path.dirname(os.path.abspath(__file__))
         server_script = os.path.join(current_dir, "..", "mcp_server.py")
         
@@ -323,7 +327,6 @@ async def search_agent(state: BankChatState) -> BankChatState:
         )
         
         # Load MCP tools (via stdio bridge) - PROPERLY AWAITING
-        logger.info(f"[search_agent] Connecting to MCP server: {server_script}")
         mcp_tools = await load_mcp_tools(
             None,
             connection={
@@ -338,9 +341,7 @@ async def search_agent(state: BankChatState) -> BankChatState:
         search_tool = next((t for t in mcp_tools if t.name == "web_search"), None)
         
         if search_tool:
-            logger.info(f"[search_agent] Calling MCP tool 'web_search' with query: {optimized_query}")
             results = await search_tool.ainvoke({"query": optimized_query})
-            logger.info("[search_agent] MCP tool results received successfully.")
         else:
             logger.warning("[search_agent] web_search tool not found in MCP server, falling back to legacy tool.")
             results = perform_web_search(optimized_query)
@@ -794,13 +795,16 @@ async def stream_agent_response(
             optimized_query = resp.content.strip()
         except Exception:
             optimized_query = last_msg
+        
+        if not optimized_query or len(optimized_query) < 2:
+            optimized_query = last_msg
+        
+        logger.info(f"[stream_agent_response] Using query for search: {optimized_query}")
 
         # Step 2: Search Tool Execution
         try:
-            import sys
             current_dir = os.path.dirname(os.path.abspath(__file__))
             server_script = os.path.join(current_dir, "..", "mcp_server.py")
-            logger.info(f"[stream_agent_response] Connecting to MCP server for search: {server_script}")
             
             # Signature correct for langchain-mcp-adapters 0.1.x
             mcp_tools = await load_mcp_tools(
@@ -815,9 +819,7 @@ async def stream_agent_response(
             search_tool = next((t for t in mcp_tools if t.name == "web_search"), None)
             
             if search_tool:
-                logger.info(f"[stream_agent_response] Calling MCP tool 'web_search' with query: {optimized_query}")
                 results = await search_tool.ainvoke({"query": optimized_query})
-                logger.info("[stream_agent_response] MCP search successful.")
             else:
                 logger.warning("[stream_agent_response] MCP tool not found, falling back.")
                 results = await sync_to_async(perform_web_search)(optimized_query)
