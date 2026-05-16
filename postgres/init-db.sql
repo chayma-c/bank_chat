@@ -170,28 +170,61 @@
     -- TABLES & VIEWS
     -- ══════════════════════════════════════════════════════════════════════════
 
-    -- Create sample schema for banking data
+    -- ══════════════════════════════════════════════════════════════════════════
+    -- TABLE: transactions
+    -- Unified schema — legacy seed columns + CSV-aligned fraud-engine columns.
+    -- Legacy columns are kept for backward compatibility with the text-to-sql
+    -- agent and existing seed data. CSV-aligned columns are what the fraud
+    -- detection engine (loader.py) actually reads.
+    -- ══════════════════════════════════════════════════════════════════════════
     CREATE TABLE IF NOT EXISTS transactions (
-        id SERIAL PRIMARY KEY,
-        transaction_id VARCHAR(255) UNIQUE NOT NULL,
-        user_id VARCHAR(255) NOT NULL,
-        amount DECIMAL(15, 2) NOT NULL,
-        currency VARCHAR(3) DEFAULT 'EUR',
-        transaction_type VARCHAR(50) NOT NULL,
-        status VARCHAR(20) DEFAULT 'pending',
-        fraud_score DECIMAL(5, 4),
-        is_fraudulent BOOLEAN DEFAULT FALSE,
-        merchant_name VARCHAR(255),
-        merchant_category VARCHAR(100),
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        -- ── Primary key ─────────────────────────────────────────────────────
+        id                      SERIAL PRIMARY KEY,
+
+        -- ── Legacy columns (kept for backward compat & seed data) ────────────
+        transaction_id          VARCHAR(255) UNIQUE,
+        user_id                 VARCHAR(255),
+        amount                  DECIMAL(15, 2),
+        currency                VARCHAR(3)    DEFAULT 'EUR',
+        status                  VARCHAR(20)   DEFAULT 'pending',
+        fraud_score             DECIMAL(5, 4),
+        is_fraudulent           BOOLEAN       DEFAULT FALSE,
+        merchant_name           VARCHAR(255),
+        merchant_category       VARCHAR(100),
+        created_at              TIMESTAMPTZ   DEFAULT NOW(),
+        updated_at              TIMESTAMPTZ   DEFAULT NOW(),
+
+        -- ── CSV-aligned columns (fraud detection engine) ──────────────────────
+        -- Matches: Transaction_Amount, Timestamp, Geo_Location, IP_Address,
+        --          Merchant_MCC, Account_CurrentBalance, Client_IBAN,
+        --          Counterparty_IBAN, Transaction_Type
+        transaction_amount      DECIMAL(15, 2),
+        timestamp               TIMESTAMPTZ,
+        geo_location            TEXT,
+        ip_address              VARCHAR(45),
+        merchant_mcc            INTEGER,
+        account_current_balance DECIMAL(15, 2),
+        client_iban             VARCHAR(64),
+        counterparty_iban       VARCHAR(64),
+        transaction_type        VARCHAR(50),
+
+        -- ── Ingestion tracking ───────────────────────────────────────────────
+        -- Set on INSERT — used by the incremental loader to find new rows.
+        ingested_at             TIMESTAMPTZ   DEFAULT NOW()
     );
 
-    CREATE INDEX idx_transactions_user_id       ON transactions(user_id);
-    CREATE INDEX idx_transactions_created_at    ON transactions(created_at);
-    CREATE INDEX idx_transactions_fraud_score   ON transactions(fraud_score);
-    CREATE INDEX idx_transactions_is_fraudulent ON transactions(is_fraudulent);
-    CREATE INDEX idx_transactions_status        ON transactions(status);
+    -- ── Legacy indexes (preserved) ────────────────────────────────────────────
+    CREATE INDEX idx_transactions_user_id           ON transactions(user_id);
+    CREATE INDEX idx_transactions_created_at        ON transactions(created_at);
+    CREATE INDEX idx_transactions_fraud_score       ON transactions(fraud_score);
+    CREATE INDEX idx_transactions_is_fraudulent     ON transactions(is_fraudulent);
+    CREATE INDEX idx_transactions_status            ON transactions(status);
+
+    -- ── New indexes (CSV-aligned columns) ────────────────────────────────────
+    CREATE INDEX idx_transactions_client_iban       ON transactions(client_iban);
+    CREATE INDEX idx_transactions_counterparty_iban ON transactions(counterparty_iban);
+    CREATE INDEX idx_transactions_timestamp         ON transactions(timestamp DESC);
+    CREATE INDEX idx_transactions_ingested_at       ON transactions(ingested_at DESC);
 
     -- ── Fraud detection rules (admin CRUD) ────────────────────────────────
     CREATE TABLE IF NOT EXISTS fraud_rules (
@@ -258,6 +291,52 @@
     CREATE INDEX idx_fdl_risk_level      ON fraud_decision_logs(risk_level);
     CREATE INDEX idx_fdl_tracfin         ON fraud_decision_logs(tracfin_required);
     CREATE INDEX idx_fdl_mail_sent       ON fraud_decision_logs(mail_sent);
+
+    -- ══════════════════════════════════════════════════════════════════════════
+    -- TABLE: account_risk_profile
+    -- Rolling-memory table — one row per client IBAN.
+    -- Updated after every analysis run. Stores the last known risk state and
+    -- rolling aggregates so the engine only needs to analyze NEW transactions
+    -- within the configured window (rolling_window_days) each run.
+    -- ══════════════════════════════════════════════════════════════════════════
+    CREATE TABLE IF NOT EXISTS account_risk_profile (
+        id                      SERIAL PRIMARY KEY,
+
+        -- ── Identity ─────────────────────────────────────────────────────────
+        client_iban             VARCHAR(64)   UNIQUE NOT NULL,
+
+        -- ── Last analysis snapshot ───────────────────────────────────────────
+        last_analyzed_at        TIMESTAMPTZ,                    -- when the last run occurred
+        last_score_final        INTEGER       DEFAULT 0,        -- fraud score from last run
+        last_risk_level         VARCHAR(32)   DEFAULT 'APPROVED'
+                                    CHECK (last_risk_level IN ('APPROVED','REVIEW','HOLD','BLOCK')),
+        last_tracfin            BOOLEAN       DEFAULT FALSE,    -- TRACFIN flag from last run
+
+        -- ── Rolling window aggregates ─────────────────────────────────────────
+        -- Recomputed each analysis run over the last `rolling_window_days` days.
+        rolling_tx_count        INTEGER       DEFAULT 0,        -- # of transactions in window
+        rolling_total_amount    DECIMAL(15,2) DEFAULT 0,        -- sum of amounts in window
+        rolling_avg_amount      DECIMAL(15,2) DEFAULT 0,        -- average amount in window
+        rolling_max_amount      DECIMAL(15,2) DEFAULT 0,        -- largest single tx in window
+        rolling_window_days     INTEGER       DEFAULT 7,        -- window size used in last run
+
+        -- ── Historical alert tracking (implements Rule 8) ─────────────────────
+        alert_count_7d          INTEGER       DEFAULT 0,        -- analyses that triggered alerts in last 7d
+
+        -- ── Timestamps ───────────────────────────────────────────────────────
+        created_at              TIMESTAMPTZ   DEFAULT NOW(),
+        updated_at              TIMESTAMPTZ   DEFAULT NOW()
+    );
+
+    -- Auto-update updated_at
+    CREATE TRIGGER account_risk_profile_updated_at
+        BEFORE UPDATE ON account_risk_profile
+        FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+
+    CREATE INDEX idx_arp_client_iban        ON account_risk_profile(client_iban);
+    CREATE INDEX idx_arp_last_analyzed_at   ON account_risk_profile(last_analyzed_at DESC);
+    CREATE INDEX idx_arp_last_risk_level    ON account_risk_profile(last_risk_level);
+    CREATE INDEX idx_arp_last_score_final   ON account_risk_profile(last_score_final DESC);
 
     -- ══════════════════════════════════════════════════════════════════════════
     -- 🌱 SEED DATA — 60 realistic banking transactions for sandbox testing

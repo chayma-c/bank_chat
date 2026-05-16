@@ -28,12 +28,14 @@ def init_db():
                     day_of_week INTEGER DEFAULT 1,
                     last_run TIMESTAMP,
                     last_auto_run TIMESTAMP,
+                    rolling_window_days INTEGER DEFAULT 7,
                     is_active BOOLEAN DEFAULT TRUE
                 );
             """)
             
-            # Migration: Ensure last_auto_run exists if table was already created
+            # Live migrations — safe to run on existing installs because of IF NOT EXISTS
             cur.execute("ALTER TABLE fraud_metadata ADD COLUMN IF NOT EXISTS last_auto_run TIMESTAMP;")
+            cur.execute("ALTER TABLE fraud_metadata ADD COLUMN IF NOT EXISTS rolling_window_days INTEGER DEFAULT 7;")
             
             # Ensure at least one settings row exists
             cur.execute("SELECT COUNT(*) FROM fraud_metadata;")
@@ -107,6 +109,45 @@ def update_last_auto_run():
                 SET last_auto_run = CURRENT_TIMESTAMP
                 WHERE id = (SELECT id FROM fraud_metadata LIMIT 1);
             """)
+            conn.commit()
+    finally:
+        conn.close()
+
+
+# ── Rolling window settings ────────────────────────────────────────────────────────
+
+def get_rolling_window_days() -> int:
+    """
+    Return the configured rolling window size in days.
+    Defaults to 7 if the column is missing (old install) or no row exists.
+    """
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT rolling_window_days FROM fraud_metadata LIMIT 1;")
+            row = cur.fetchone()
+            if row is None or row[0] is None:
+                return 7
+            return int(row[0])
+    finally:
+        conn.close()
+
+
+def update_rolling_window_days(days: int) -> None:
+    """
+    Persist a new rolling window size (in days) to fraud_metadata.
+    Called by the /settings POST endpoint when the UI knob is updated.
+    """
+    if days < 1:
+        raise ValueError("rolling_window_days must be >= 1")
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE fraud_metadata
+                SET rolling_window_days = %s
+                WHERE id = (SELECT id FROM fraud_metadata LIMIT 1);
+            """, (days,))
             conn.commit()
     finally:
         conn.close()
