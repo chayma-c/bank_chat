@@ -20,8 +20,10 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langchain_groq import ChatGroq
 
 from .database        import SessionLocal
+from .db              import get_rolling_window_days
 from .loader          import filter_by_iban, find_transaction_file, get_account_summary, load_transactions
 from .output_reports  import route_fraud_output
+from .profile_store   import upsert_account_risk_profile
 from .rule_engine     import run_rules_from_db          # ← dynamique (DB)
 from .scoring         import (
     compute_aml_score,
@@ -117,21 +119,45 @@ Réponds UNIQUEMENT au format JSON :
     return {"iban": iban, "action": action, "error": None}
 
 
-# ══════════════════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════════════
 # Nœud 2 — load_data
-# ══════════════════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════════════
 
 def load_data(state: FraudAgentState) -> dict:
-    """Charge et filtre les transactions pour l'IBAN extrait."""
+    """
+    Charge et filtre les transactions pour l'IBAN extrait.
+
+    Mode DB (prioritaire) : interroge la table `transactions` avec filtre IBAN
+    et fenêtre glissante configurée dans `fraud_metadata.rolling_window_days`.
+    Mode fichier (fallback) : lit le CSV si aucune session DB n'est disponible.
+    """
     if state.get("error"):
         return {}
 
     iban       = state["iban"]
     excel_path = state.get("excel_path", "")
 
+    db = SessionLocal()
     try:
-        df_all = load_transactions(excel_path or None)
-        df     = filter_by_iban(df_all, iban)
+        # Read the configured rolling window (default 7 days if not set)
+        window_days = get_rolling_window_days()
+
+        # DB-mode: filter by IBAN and window directly in SQL
+        df = load_transactions(db=db, iban=iban, window_days=None)
+        # window_days=None here — we use all history for on-demand analysis
+        # (the window is applied in batch/scheduler runs, not interactive ones)
+        # Switch to window_days=window_days once daily ingestion is live (Phase 3)
+
+        if df.empty:
+            # Fallback: try CSV file so the service still works during transition
+            logger.warning(
+                f"[load_data] No rows in DB for {iban}, falling back to CSV."
+            )
+            try:
+                df_all = load_transactions(excel_path or None)
+                df     = filter_by_iban(df_all, iban)
+            except FileNotFoundError:
+                pass
 
         if df.empty:
             return {
@@ -139,25 +165,29 @@ def load_data(state: FraudAgentState) -> dict:
                 "transactions_count": 0,
                 "account_summary":    None,
                 "error": f"Aucune transaction trouvée pour l'IBAN {iban}.",
+                "rolling_window_days": window_days,
             }
 
         summary = get_account_summary(df)
         rows    = df.to_dict("records")
 
-        logger.info(f"[load_data] {len(rows)} transactions pour {iban}")
+        logger.info(f"[load_data] {len(rows)} transactions pour {iban} (window={window_days}d)")
         return {
-            "transactions_raw":   rows,
-            "transactions_count": len(rows),
-            "account_summary":    summary,
-            "error":              None,
+            "transactions_raw":    rows,
+            "transactions_count":  len(rows),
+            "account_summary":     summary,
+            "rolling_window_days": window_days,
+            "error":               None,
         }
 
-    except FileNotFoundError as exc:
-        return {"error": str(exc), "transactions_raw": [], "transactions_count": 0}
     except Exception as exc:
         logger.exception("[load_data] Unexpected error")
-        return {"error": f"Erreur chargement données : {exc}",
-                "transactions_raw": [], "transactions_count": 0}
+        return {
+            "error": f"Erreur chargement données : {exc}",
+            "transactions_raw": [], "transactions_count": 0,
+        }
+    finally:
+        db.close()
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -229,8 +259,25 @@ def analyze_fraud(state: FraudAgentState) -> dict:
                 f"AML={score_aml} Final={score_final} Niveau={risk_level} "
                 f"TRACFIN={tracfin}")
 
-    # ── Rapport Excel ─────────────────────────────────────────────────────
+    # ── Sauvegarder le profil de risque en base ───────────────────────────
     iban        = state["iban"]
+    window_days = state.get("rolling_window_days", 7)
+
+    db2 = SessionLocal()
+    try:
+        upsert_account_risk_profile(
+            db=db2,
+            iban=iban,
+            score_final=score_final,
+            risk_level=risk_level,
+            tracfin=tracfin,
+            df=df,
+            window_days=window_days,
+        )
+    finally:
+        db2.close()
+
+    # ── Rapport Excel ─────────────────────────────────────────────────────
     output_data = route_fraud_output(
         df=df,
         iban=iban,
@@ -250,7 +297,18 @@ def analyze_fraud(state: FraudAgentState) -> dict:
         # Top 5 montants
         top_amounts = df.sort_values(by=df.columns[df.columns.str.contains("amount|montant")][0], ascending=False).head(5)
         for _, row in top_amounts.iterrows():
-            suspicious_samples.append(f"• {row.get('timestamp','?')} | {row.get('amount', row.get('transaction_amount',0)):,.2f} TND | {row.get('transaction_type','?')} -> {row.get('counterparty_iban','?')}")
+            amt = row.get('amount')
+            if pd.isna(amt) or amt is None:
+                amt = row.get('transaction_amount')
+            if pd.isna(amt) or amt is None:
+                amt = 0.0
+            
+            try:
+                amt_float = float(amt)
+            except (ValueError, TypeError):
+                amt_float = 0.0
+                
+            suspicious_samples.append(f"• {row.get('timestamp','?')} | {amt_float:,.2f} TND | {row.get('transaction_type','?')} -> {row.get('counterparty_iban','?')}")
 
     return {
         "fraud_results":    rule_results,
