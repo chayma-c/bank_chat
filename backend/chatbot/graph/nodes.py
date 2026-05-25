@@ -8,7 +8,7 @@ from langchain_ollama import ChatOllama
 from langchain_core.messages import SystemMessage, AIMessage, HumanMessage
 from .state import BankChatState
 from ..search_tool import perform_web_search
-from typing import Optional
+from typing import Optional, Any
 
 # MCP Imports
 from mcp import StdioServerParameters
@@ -104,24 +104,130 @@ def _get_reasoning(intent: str, last_msg: str) -> str:
 
 # ── Intent keyword lists ─────────────────────────────────────────────────────
 
-# Keywords that strongly indicate a database / SQL query intent
-_SQL_KEYWORDS = [
-    # Quantitative / aggregation
-    "combien", "total", "nombre", "count", "somme", "moyenne", "montant",
-    "statistique", "rapport", "reporting", "top ", "les 5", "les 10",
-    # DB-query verbs
-    "liste", "affiche", "montre", "donne moi", "trouve", "cherche",
-    "toutes les transactions", "tous les", "toutes les",
-    # Status values that live in the DB (not fraud-reporting actions)
-    "bloquées", "bloqués", "blocked", "failed", "pending", "approved",
-    "rejetées", "rejetés",
-    # Explicit DB / SQL references
-    "base de données", "base", "select", "requête sql",
-    # Domain columns / tables users ask about
-    "score de fraude", "risk_level", "decision", "décision",
-    "règles", "règle", "tracfin", "signalement",
-    "transaction", "transactions", "virement", "paiement",
+ 
+# ── NIVEAU 1 : EXCLUSIONS STRICTES ───────────────────────────────────────────
+# Si la requête contient ces patterns → NE JAMAIS router vers text_to_sql
+
+_TEXT_TO_SQL_EXCLUSIONS = [
+    # Fraude avec IBAN (va vers fraud_agent)
+    r"\bIBAN[A-Z0-9_\s]*\b",
+    r"\banalyse.*fraude.*IBAN\b",
+    r"\bfraude.*pour\s+IBAN\b",
+    r"\bTRACFIN.*IBAN\b",
+    
+    # Actions de transfert (va vers transfer_agent)
+    r"\bfaire.*virement\b",
+    r"\benvoyer.*\d+\s*€\b",
+    r"\btransf[eé]rer\b",
+    r"\bvirement.*vers\b",
+    r"\bpayer\b",
+    
+    # Consultation de compte (va vers account_agent)
+    r"\bmon solde\b",
+    r"\bmes comptes?\b",
+    r"\bsolde.*compte\b",
+    r"\brelev[eé]\b",
+    r"\bmes op[eé]rations\b",
+    
+    # Signalement de fraude (va vers fraud_agent)
+    r"\bsignaler.*fraude\b",
+    r"\bsignaler.*phishing\b",
+    r"\brapport.*fraude\b",
+    r"\bqui est.*suspect\b",
 ]
+
+
+# ── NIVEAU 2 : INDICATEURS SQL ANALYTIQUES ───────────────────────────────────
+# La requête DOIT contenir au moins UN de ces patterns pour être éligible
+ 
+_TEXT_TO_SQL_INDICATORS = [
+    # Quantitatifs stricts
+    r"\bcombien\s+(de|y\s+a-t-il|y\s+a)\b",
+    r"\bnombre\s+(total\s+)?de\b",
+    r"\btotal\s+de\b",
+    r"\bmoyenne\s+de\b",
+    r"\bsomme\s+de\b",
+    r"\bpourcentage\s+de\b",
+    
+    # Listings analytiques
+    r"\bliste\s+(les|toutes?|des)\s+(transactions|r[èe]gles|analyses|d[ée]cisions)\b",
+    r"\baffiche\s+(les|toutes?)\s+(transactions|r[èe]gles)\b",
+    r"\bmontre[-\s]moi\s+(les|toutes?)\s+\b",
+    r"\btop\s+\d+\b",
+    r"\bpremier[s]?\s+\d+\b",
+    
+    # Recherche filtrée
+    r"\btrouv(?:e|er)\s+(les|toutes?)\s+(transactions|r[èe]gles)\b",
+    r"\bcherch(?:e|er)\s+dans\s+(la\s+base|les\s+transactions)\b",
+    r"\bfiltre\b",
+    r"\bo[ùu]\s+.*\s*=\s*\b",
+    r"\bavec\s+.*\s*=\s*\b",
+    
+    # Comparatifs et analytiques
+    r"\bcompare\b",
+    r"\br[ée]partition\b",
+    r"\btendance\b",
+    r"\b[ée]volution\b",
+]
+
+# ── NIVEAU 3 : CONTEXTE BASE DE DONNÉES ──────────────────────────────────────
+# Renforce la confiance si présent (mais pas obligatoire)
+ 
+_SQL_CONTEXT_KEYWORDS = {
+    # Tables
+    "transactions", "fraud_rules", "fraud_decision_logs",
+    "règles", "analyses", "décisions", "logs",
+    
+    # Attributs consultables (pas IBAN seul !)
+    "status", "statut", "score", "montant", "amount",
+    "bloqué", "bloquée", "bloquées", 
+    "frauduleux", "frauduleuses",
+    "suspect", "suspectes", 
+    "date", "créé",
+    
+    # Contexte lecture
+    "base", "database", "table", "données", "historique",
+    "total", "nombre",
+}
+ 
+ 
+def _is_text_to_sql_intent(message: str) -> bool:
+    """
+    Détection stricte à 3 niveaux pour text_to_sql.
+    
+    Returns:
+        True si la requête doit aller vers text_to_sql_agent
+    """
+    import re
+    msg_lower = message.lower()
+    
+    # ── NIVEAU 1 : EXCLUSIONS (priorité absolue) ─────────────────────────────
+    for pattern in _TEXT_TO_SQL_EXCLUSIONS:
+        if re.search(pattern, msg_lower, re.IGNORECASE):
+            logger.info(f"[text_to_sql] ❌ EXCLUDED by pattern: {pattern}")
+            return False
+    
+    # ── NIVEAU 2 : INDICATEURS ANALYTIQUES REQUIS ────────────────────────────
+    has_indicator = False
+    for pattern in _TEXT_TO_SQL_INDICATORS:
+        if re.search(pattern, msg_lower, re.IGNORECASE):
+            has_indicator = True
+            logger.info(f"[text_to_sql] ✅ Indicator found: {pattern}")
+            break
+    
+    if not has_indicator:
+        logger.info("[text_to_sql] ❌ No SQL analytical indicator")
+        return False
+    
+    # ── NIVEAU 3 : CONTEXTE SQL (bonus de confiance) ─────────────────────────
+    has_context = any(kw in msg_lower for kw in _SQL_CONTEXT_KEYWORDS)
+    
+    if has_context:
+        logger.info("[text_to_sql] ✅ SQL context detected → APPROVED")
+    else:
+        logger.info("[text_to_sql] ⚠️ No SQL context but indicator present → APPROVED")
+    
+    return True
 
 # Keywords that indicate the user is *reporting* or *asking about* fraud (not querying the DB)
 _FRAUD_KEYWORDS = [
@@ -139,62 +245,82 @@ _SEARCH_KEYWORDS = [
 
 def detect_intent(state: BankChatState) -> BankChatState:
     selected = state.get("selected_agent")
+   # ── PRIORITÉ 1 : Sélection manuelle ──────────────────────────────────────
     if selected and selected not in ("orchestrator", "auto"):
-        return {**state, "intent": "text_to_sql" if selected == "sql" else selected}
-
+        intent = "text_to_sql" if selected == "sql" else selected
+        logger.info(f"[detect_intent] Manual selection: {intent}")
+        return {**state, "intent": intent}
+ 
     last_msg = state["messages"][-1].content
     lower_msg = last_msg.lower()
-
-    # ── Priority 1 : SQL keyword override (before LLM call) ──────────────────
-    # Queries about counts, lists, stats from the DB are unambiguously text_to_sql.
-    if any(k in lower_msg for k in _SQL_KEYWORDS):
-        logger.info(f"[detect_intent] SQL keyword override → text_to_sql")
+   
+   # ── PRIORITÉ 2 : Text-to-SQL avec détection stricte ──────────────────────
+    if _is_text_to_sql_intent(last_msg):
+        logger.info(f"[detect_intent] ✅ Routing to text_to_sql_agent")
         return {**state, "intent": "text_to_sql"}
+    
 
-    # ── Priority 2 : LLM classification ──────────────────────────────────────
+    # ── Priority 3: LLM classification ──────────────────────────────────────
     prompt = (
         "Classify the banking user's intent into ONE of these categories:\n"
         "- account      : Balance, IBAN request, account status, RIB.\n"
         "- transfer     : Sending money, wire transfers, recurring payments.\n"
         "- support      : Lost card, mobile app issues, password reset, generic help.\n"
-        "- fraud: Reporting fraudulent emails, reporting scams, auditing an IBAN ,phishing, scam, stolen card.\n"
-        "- text_to_sql  : Questions that require querying the banking database — counts, "
-        "statistics, lists of transactions, blocked/failed payments, fraud scores, rules, "
-        "reports. The answer comes from a SQL query, not from a conversation.\n"
+        "- fraud        : Reporting fraudulent emails, scams, phishing, analyzing an IBAN for fraud.\n"
         "- search       : General info not in bank DB, market trends, exchange rates, news.\n"
         "- fallback     : Greetings, off-topic, anything else.\n\n"
+        "IMPORTANT: Do NOT classify database queries (counts, lists, statistics) here - "
+        "they are handled separately.\n\n"
         "EXAMPLES:\n"
         "'Quel est mon solde ?' -> account\n"
         "'Je veux envoyer 100€ à Ali' -> transfer\n"
         "'Ma carte est bloquée' -> support\n"
-        "'Cet IBAN est-il suspect ?' -> fraud\n"
+        "'Analyser l'IBAN XXXX pour fraude' -> fraud\n"
         "'Signaler un phishing' -> fraud\n"
-        "'Analyser l\'IBAN XXXX est-il suspect?' -> fraud\n"
-        "'Analyser les transactions frauduleuses' -> fraud\n"
-        "'Combien de transactions au total ?' -> text_to_sql\n"
-        "'Trouve les transactions bloquées' -> text_to_sql\n"
-        "'Quel est le score de fraude moyen ?' -> text_to_sql\n"
-        "'Quelles règles AML sont actives ?' -> text_to_sql\n"
+        "'Quel est le cours de l'EUR/USD ?' -> search\n"
         "'Bonjour' -> fallback\n\n"
         f"Message: {last_msg}\n"
         "Classification (one word only):"
     )
+
     intent = llm.invoke(prompt).content.strip().lower().split()[0]
 
-    # ── Priority 3 : Fraud keyword override (explicit fraud-reporting terms only) ──
+    # ── Validation & Override ─────────────────────────────────────────────────
+    
+    # Fraud keywords override
+    _FRAUD_KEYWORDS = ["fraude", "frauduleux", "phishing", "arnaque", "suspect"]
     if intent not in ("fraud", "text_to_sql") and any(k in lower_msg for k in _FRAUD_KEYWORDS):
-        intent = "fraud"
-        logger.info(f"[detect_intent] Fraud keyword override → fraud")
-
-    # ── Priority 4 : Search override ──────────────────────────────────────────
+        if "iban" in lower_msg or "signaler" in lower_msg or "analyser" in lower_msg:
+            intent = "fraud"
+            logger.info(f"[detect_intent] Fraud keyword override → fraud")
+    
+    # Search keywords override
+    _SEARCH_KEYWORDS = ["cours", "taux de change", "météo", "actualité", "news"]
     if intent not in ("search", "text_to_sql", "fraud") and any(k in lower_msg for k in _SEARCH_KEYWORDS):
         intent = "search"
         logger.info(f"[detect_intent] Search keyword override → search")
-
+    
+    # Validation finale
     valid_intents = ("account", "transfer", "support", "fraud", "search", "text_to_sql")
     resolved = intent if intent in valid_intents else "fallback"
-    logger.info(f"[detect_intent] '{last_msg[:60]}' → {resolved}")
-    return {**state, "intent": resolved}
+    
+    logger.info(f"[detect_intent] '{last_msg[:60]}...' → {resolved}")
+    # Validation finale
+    valid_intents = ("account", "transfer", "support", "fraud", "search", "text_to_sql")
+    resolved = intent if intent in valid_intents else "fallback"
+    
+    # ── LOG D'INTENTION AJOUTÉ POUR LE RAPPORT ET LES LOGS DOCKER ──
+    logger.info(
+        f"\n"
+        f"╔══════════════════════════════════════════════════════════════════════════\n"
+        f"║ [INTENT_DETECTION] Analyse de l'orchestrateur LangGraph\n"
+        f"║ ➜ Entrée utilisateur : \"{last_msg[:80]}\"\n"
+        f"║ ➜ Intention détectée : {resolved.upper()}\n"
+        f"║ ➜ Routage dynamique  : {route_to_agent({'intent': resolved})}\n"
+        f"╚══════════════════════════════════════════════════════════════════════════"
+    )
+    
+    return {**state, "intent": resolved}    
 
 def _get_fraud_decision_and_result(messages: list, user_id: str, session_id: str, auth_token: str | None = None) -> tuple:
     """Unifies ANALYZE vs TALK logic and calling the fraud-service."""
@@ -333,6 +459,79 @@ def search_agent(state: BankChatState) -> BankChatState:
     resp = llm.invoke([system] + list(state["messages"]))
     return {**state, "messages": [AIMessage(content=resp.content)], "agent": "search_agent"}
 
+# ── Helper : message d'erreur SQL convivial ─────────────────────────────────────
+
+def _format_sql_error(error_msg: str, explanation: str, sql: str) -> str:
+    """
+    Convertit un message d'erreur brut du text-to-sql-service en un message
+    UI convivial, avec un bloc détail technique repliable.
+
+    Cela couvre deux cas :
+      - Erreurs de validation (error_type renvoyé dans la réponse JSON)
+      - Erreurs d'exécution PostgreSQL résiduelles
+    """
+    msg_lower = (error_msg or "").lower()
+    expl_lower = (explanation or "").lower()
+    combined = msg_lower + " " + expl_lower
+
+    # ── Classifier le type d'erreur ─────────────────────────────────────
+    if any(k in combined for k in ("delete", "update", "insert", "drop", "alter",
+                                   "truncate", "opération interdite", "dml",
+                                   "lecture seule", "non autorisé")):
+        icon, title = "🚫", "Opération non autorisée"
+        guidance = (
+            "Je suis désolé, mais je ne peux pas exécuter des opérations de modification "
+            "(DELETE, UPDATE, INSERT, DROP…). Ce système est en **lecture seule** "
+            "pour protéger l'intégrité des données bancaires.\n"
+            "Reformulez votre demande sous forme de consultation."
+        )
+    elif any(k in combined for k in (";", "requêtes multiples", "stacked")):
+        icon, title = "🚫", "Requêtes multiples bloquées"
+        guidance = (
+            "Pour des raisons de sécurité, seule **une seule requête SELECT** est acceptée à la fois. "
+            "Les requêtes enchaînées via `;` sont interdites."
+        )
+    elif any(k in combined for k in ("pg_", "information_schema", "système interdit",
+                                     "tables système", "system_table")):
+        icon, title = "🔒", "Accès système interdit"
+        guidance = (
+            "L'accès aux tables système PostgreSQL est strictement interdit. "
+            "Veuillez reformuler votre question en ciblant les tables bancaires disponibles."
+        )
+    elif any(k in combined for k in ("hors périmètre", "non autorisée",
+                                     "unknown_table", "table '")):
+        icon, title = "📊", "Table hors périmètre"
+        guidance = (
+            "La table demandée n'est pas accessible dans ce système. "
+            "Les tables autorisées sont : **transactions**, **fraud\_rules**, **fraud\_decision\_logs**."
+        )
+    elif any(k in combined for k in ("colonne", "column", "hallucination",
+                                     "inconnue", "does not exist")):
+        icon, title = "❓", "Colonne inconnue dans le schéma"
+        guidance = (
+            "La question fait référence à une colonne qui n'existe pas dans le schéma bancaire. "
+            "Reformulez en utilisant uniquement les colonnes disponibles dans les tables concernées."
+        )
+    else:
+        icon, title = "❌", "Erreur lors de l'analyse"
+        guidance = (
+            "Une erreur s'est produite lors du traitement de votre requête. "
+            "Vérifiez que votre question porte bien sur les transactions, "
+            "les règles de fraude ou les décisions d'analyse."
+        )
+
+    # Détail technique en bloc repliable
+    detail_src = explanation or error_msg or ""
+    sql_block = f"\n**SQL généré :**\n```sql\n{sql}\n```" if sql else ""
+    detail = (
+        f"<details>\n<summary>Détail technique</summary>\n\n"
+        f"> {detail_src}"
+        f"{sql_block}\n</details>"
+    )
+
+    return f"{icon} **{title}**\n\n{guidance}\n\n{detail}"
+
+
 def text_to_sql_agent(state: BankChatState) -> dict:
     """
     Text-to-SQL agent node.
@@ -406,11 +605,8 @@ def text_to_sql_agent(state: BankChatState) -> dict:
         else:
             # Service returned an error but with 200 status
             error_msg = result.get("error", "Erreur inconnue.")
-            ai_content = (
-                f"⛔ **Erreur Text-to-SQL**\n\n"
-                f"{explanation or error_msg}"
-            )
-            logger.warning(f"[text_to_sql_agent] Service error: {error_msg}")
+            ai_content = _format_sql_error(error_msg, explanation, sql)
+            logger.warning(f"[text_to_sql_agent] Service error [{result.get('status')}]: {error_msg}")
 
         return {
             **state,
@@ -624,6 +820,9 @@ def stream_agent_response(state: BankChatState):
     Yields (token, agent_key) tuples — or (token, agent_key, fraud_result) pour fraud ANALYZE.
     """
     intent     = state.get("intent", "fallback")
+    # ── LOG DE FLUX AJOUTÉ POUR TRACER LE STREAMING ──
+    logger.info(f"[STREAM] Initialisation du flux asynchrone HTTP (Chunk Streaming) pour l'intention : {intent.upper()}")
+    
     messages   = state.get("messages", [])
     user_id    = state.get("user_id", "anonymous")
     session_id = state.get("session_id", "")
@@ -747,7 +946,7 @@ def stream_agent_response(state: BankChatState):
                 yield header + sql_block + explanation, "text_to_sql_agent"
             else:
                 error_msg = result.get("error", "Erreur inconnue.")
-                yield f"⛔ **Erreur Text-to-SQL**\n\n{explanation or error_msg}", "text_to_sql_agent"
+                yield _format_sql_error(error_msg, explanation, sql), "text_to_sql_agent"
 
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 403:
