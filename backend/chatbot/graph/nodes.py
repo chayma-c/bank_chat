@@ -464,9 +464,9 @@ def _format_sql_error(error_msg: str, explanation: str, sql: str) -> str:
     combined = msg_lower + " " + expl_lower
 
     # ── Classifier le type d'erreur ─────────────────────────────────────
-    if any(k in combined for k in ("delete", "update", "insert", "drop", "alter",
-                                   "truncate", "opération interdite", "dml",
-                                   "lecture seule", "non autorisé")):
+    if (any(re.search(r'\b' + k + r'\b', combined) for k in
+            ("delete", "update", "insert", "drop", "alter", "truncate", "dml"))
+            or any(k in combined for k in ("opération interdite", "lecture seule", "non autorisé"))):
         icon, title = "🚫", "Opération non autorisée"
         guidance = (
             "Je suis désolé, mais je ne peux pas exécuter des opérations de modification "

@@ -156,12 +156,16 @@ def _validate_columns(sql: str, table_refs: list[str]) -> ValidationResult | Non
     
     select_clause = select_match.group(1)
     
+    # Supprimer les alias AS pour ne pas les confondre avec des colonnes
+    # ex: COUNT(*) AS total  →  COUNT(*)
+    select_no_aliases = re.sub(r"\bAS\s+\w+", "", select_clause, flags=re.IGNORECASE)
+
     # CORRECTION : Ignorer tout ce qui contient un point (alias de table)
     # On ne garde que les identifiants nus
     candidate_cols = []
-    for word in re.findall(r"\b([a-zA-Z_][a-zA-Z0-9_]*)\b", select_clause):
+    for word in re.findall(r"\b([a-zA-Z_][a-zA-Z0-9_]*)\b", select_no_aliases):
         # Vérifier si ce mot est suivi d'un point dans la clause
-        if not re.search(rf"\b{word}\s*\.", select_clause, re.IGNORECASE):
+        if not re.search(rf"\b{word}\s*\.", select_no_aliases, re.IGNORECASE):
             candidate_cols.append(word)
     
     hallucinations = []
