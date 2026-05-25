@@ -11,9 +11,8 @@ from .state import BankChatState
 from ..search_tool import perform_web_search
 from typing import Optional, Any
 
-# MCP Imports
-from langchain_mcp_adapters.tools import load_mcp_tools
-from langgraph.prebuilt import create_react_agent
+# MCP Imports — loaded lazily inside get_research_agent() to avoid
+# crashing the app if the package is unavailable in the local environment.
 
 # Local Imports
 from .prompts import BASE_POLICY, SYSTEM_PROMPTS, MAIL_AGENT_SYSTEM, ADVANCED_RESEARCH_PROMPT
@@ -58,7 +57,14 @@ llm = get_llm()
 
 async def get_research_agent():
     """Returns a ReAct agent configured with the MCP search tool."""
-    import sys
+    try:
+        # pyrefly: ignore [missing-import]
+        from langchain_mcp_adapters.tools import load_mcp_tools
+        from langgraph.prebuilt import create_react_agent
+    except ImportError:
+        logger.warning("[get_research_agent] langchain-mcp-adapters not installed — MCP search unavailable.")
+        return None
+
     current_dir = os.path.dirname(os.path.abspath(__file__))
     server_script = os.path.join(current_dir, "..", "mcp_server.py")
     
@@ -515,7 +521,7 @@ def _format_sql_error(error_msg: str, explanation: str, sql: str) -> str:
     return f"{icon} **{title}**\n\n{guidance}\n\n{detail}"
 
 
-def text_to_sql_agent(state: BankChatState) -> dict:
+async def text_to_sql_agent(state: BankChatState) -> dict:
     """
     Text-to-SQL agent node. (async)
 
@@ -761,7 +767,7 @@ async def mail_agent(state: BankChatState) -> BankChatState:
         try:
             _auth_headers = {"Authorization": f"Bearer {state.get('auth_token')}"} if state.get("auth_token") else {}
             async with httpx.AsyncClient() as client:
-                await client.patch(
+                patch_resp = await client.patch(
                     f"{FRAUD_SERVICE_URL}/decision-logs/{decision_log_id}/mail",
                     json={
                         "mail_sent":      status == "sent",
@@ -804,14 +810,14 @@ async def stream_agent_response(
     """
     Yields (token, agent_key) tuples (Async Generator).
     """
-    intent     = state.get("intent", "fallback")
     # ── LOG DE FLUX AJOUTÉ POUR TRACER LE STREAMING ──
     logger.info(f"[STREAM] Initialisation du flux asynchrone HTTP (Chunk Streaming) pour l'intention : {intent.upper()}")
-    
-    messages   = state.get("messages", [])
-    user_id    = state.get("user_id", "anonymous")
-    session_id = state.get("session_id", "")
-    auth_token = state.get("auth_token")
+
+    # Extract the last human message for agents that need it
+    last_msg = next(
+        (m.content for m in reversed(messages) if m.__class__.__name__ == "HumanMessage"),
+        messages[-1].content if messages else "",
+    )
 
     # ── FRAUD FLOW ─────────────────────────────────────────
     if intent == "fraud":
@@ -971,7 +977,7 @@ async def stream_agent_response(
         except Exception as e:
             logger.error(f"[stream_agent_response] Autonomous stream failed: {e}")
             # Fallback to single-pass search
-            results = await sync_to_async(perform_web_search)(last_msg)
+            results = perform_web_search(last_msg)
             system = SystemMessage(content=SYSTEM_PROMPTS["search_agent"] + f"\n\nRESULTS:\n{results}")
             async for chunk in llm.astream([system] + list(messages)):
                 if chunk.content:
