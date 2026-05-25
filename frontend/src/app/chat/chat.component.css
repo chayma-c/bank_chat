@@ -584,59 +584,70 @@
 .input-area {
   background: #fff;
   border-top: 1px solid #e5e7eb;
-  padding: 1rem 1.5rem 0.75rem;
+  padding: 1.25rem 1.5rem 1rem;
 }
 
 .input-box {
   display: flex;
-  align-items: flex-end;
+  align-items: center;
   gap: 0.75rem;
-  background: #f9fafb;
+  background: #fff;
   border: 1.5px solid #e5e7eb;
-  border-radius: 14px;
-  padding: 0.6rem 0.6rem 0.6rem 1rem;
-  transition: border-color 0.2s;
-  cursor: text;
+  border-radius: 18px;
+  padding: 0.5rem 0.6rem 0.5rem 1rem;
+  transition: all 0.2s ease;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
 }
 
 .input-box:focus-within {
-  border-color: var(--accent-blue);
-  box-shadow: 0 0 0 2px rgba(96, 165, 250, 0.2);
+  border-color: #2563eb;
+  box-shadow: 0 4px 20px rgba(37, 99, 235, 0.1);
 }
 
 .agent-select-wrapper {
   display: flex;
   align-items: center;
-  padding-left: 0.5rem;
-  border-right: 1px solid var(--border-color);
-  padding-right: 0.5rem;
-  margin-bottom: 0.5rem;
+  border-right: 1px solid #e5e7eb;
+  padding-right: 0.75rem;
+  margin-right: 0.25rem;
 }
 
 .agent-selector {
-  background: transparent;
-  color: var(--text-muted);
-  border: none;
-  outline: none;
-  font-size: 0.85rem;
-  font-weight: 500;
+  background: #f8fafc;
+  color: #64748b;
+  border: 1px solid #e2e8f0;
+  border-radius: 20px;
+  padding: 0.35rem 1.75rem 0.35rem 0.75rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
   cursor: pointer;
   appearance: none;
   -webkit-appearance: none;
-  padding-right: 1.25rem;
-  background-image: url("data:image/svg+xml;charset=UTF-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' fill='none' viewBox='0 0 24 24' stroke='%239ca3af' stroke-width='2'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' d='M19 9l-7 7-7-7'/%3E%3C/svg%3E");
+  background-image: url("data:image/svg+xml;charset=UTF-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' fill='none' viewBox='0 0 24 24' stroke='%2394a3b8' stroke-width='3'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' d='M19 9l-7 7-7-7'/%3E%3C/svg%3E");
   background-repeat: no-repeat;
-  background-position: right center;
-  transition: color 0.2s;
+  background-position: right 0.6rem center;
+  transition: all 0.2s;
 }
 
-.agent-selector:hover, .agent-selector:focus {
-  color: var(--text-color);
+.agent-selector:hover {
+  background: #f1f5f9;
+  border-color: #cbd5e1;
+  color: #2563eb;
+}
+
+.agent-selector:focus {
+  outline: none;
+  border-color: #2563eb;
 }
 
 .agent-selector option {
-  background: var(--bg-card);
-  color: var(--text-color);
+  background: #fff;
+  color: #111827;
+  text-transform: none;
+  letter-spacing: normal;
+  font-weight: 500;
 }
 
 .input-field {
@@ -862,10 +873,12 @@
   transition: background 0.15s, color 0.15s;
   cursor: pointer;
 }
+
 .admin-nav-link:hover {
   background: #1f2937;
   color: #f9fafb;
 }
+
 .admin-nav-link--active {
   background: #1e3a8a;
   color: #93c5fd;
@@ -899,8 +912,14 @@
   font-size: 13px;
   color: #b91c1c;
 }
-.error-banner svg { flex-shrink: 0; }
-.error-banner span { flex: 1; }
+
+.error-banner svg {
+  flex-shrink: 0;
+}
+
+.error-banner span {
+  flex: 1;
+}
 
 .btn-retry {
   background: none;
@@ -913,7 +932,10 @@
   cursor: pointer;
   transition: background 0.15s;
 }
-.btn-retry:hover { background: #fee2e2; }
+
+.btn-retry:hover {
+  background: #fee2e2;
+}
 
 /* ── Loading skeleton ─────────────────────────────────────────────────── */
 .skeleton-rows {
@@ -938,17 +960,53 @@
 }
 
 @keyframes shimmer {
-  0%   { background-position: 200% 0; }
-  100% { background-position: -200% 0; }
+  0% {
+    background-position: 200% 0;
+  }
+
+  100% {
+    background-position: -200% 0;
+  }
 }
 
-.skel--name    { width: 70%; height: 14px; }
-.skel--badge   { width: 60px; height: 20px; border-radius: 4px; }
-.skel--text    { width: 80%; }
-.skel--bar     { width: 90px; height: 8px; border-radius: 4px; }
-.skel--toggle  { width: 34px; height: 18px; border-radius: 9px; }
-.skel--actions { width: 80px; height: 28px; border-radius: 6px; }
-.skel--metric  { width: 60px; height: 24px; border-radius: 4px; }
+.skel--name {
+  width: 70%;
+  height: 14px;
+}
+
+.skel--badge {
+  width: 60px;
+  height: 20px;
+  border-radius: 4px;
+}
+
+.skel--text {
+  width: 80%;
+}
+
+.skel--bar {
+  width: 90px;
+  height: 8px;
+  border-radius: 4px;
+}
+
+.skel--toggle {
+  width: 34px;
+  height: 18px;
+  border-radius: 9px;
+}
+
+.skel--actions {
+  width: 80px;
+  height: 28px;
+  border-radius: 6px;
+}
+
+.skel--metric {
+  width: 60px;
+  height: 24px;
+  border-radius: 4px;
+}
 
 /* ── Loading footer text ──────────────────────────────────────────────── */
 .loading-text {
@@ -956,12 +1014,14 @@
   color: #9ca3af;
   font-style: italic;
 }
+
 /* ── À ajouter à la fin de chat.component.css ───────────────────────────── */
 
 /* Bouton admin dans le menu profile */
 .profile-menu-item--admin {
   color: #93c5fd;
 }
+
 .profile-menu-item--admin:hover {
   background: #1e3a8a;
   color: #bfdbfe;
@@ -994,6 +1054,7 @@
 .profile-menu-item--admin {
   color: #93c5fd;
 }
+
 .profile-menu-item--admin:hover {
   background: #1e3a8a;
   color: #bfdbfe;

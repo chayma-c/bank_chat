@@ -126,30 +126,30 @@ def _redis_key(session_id: str, suffix: str) -> str:
     return f"bankchat:mem:{session_id}:{suffix}"
 
 #Récupérer le résumé compressé depuis Redis 
-def cache_get_summary(session_id: str) -> Optional[str]:
+async def cache_get_summary(session_id: str) -> Optional[str]:
     """Récupère le résumé compressé depuis Redis."""
     key = _redis_key(session_id, "summary")
     try:
-        return cache.get(key)
+        return await cache.aget(key)
     except Exception as e:
         logger.warning(f"Redis cache_get_summary failed: {e}")
         return None
 
 #Stocker le résumé compressé dans Redis avec un TTL pour expiration automatique
-def cache_set_summary(session_id: str, summary: str) -> None:
+async def cache_set_summary(session_id: str, summary: str) -> None:
     """Stocke le résumé dans Redis avec TTL."""
     key = _redis_key(session_id, "summary")
     try:
-        cache.set(key, summary, timeout=SESSION_TTL)
+        await cache.aset(key, summary, timeout=SESSION_TTL)
     except Exception as e:
         logger.warning(f"Redis cache_set_summary failed: {e}")
 
 #Stocker les derniers messages récents sérialisés.
-def cache_get_recent(session_id: str) -> Optional[list]:
+async def cache_get_recent(session_id: str) -> Optional[list]:
     """Récupère les N derniers échanges sérialisés depuis Redis."""
     key = _redis_key(session_id, "recent")
     try:
-        raw = cache.get(key)
+        raw = await cache.aget(key)
         if raw:
             return json.loads(raw)
         return None
@@ -158,20 +158,20 @@ def cache_get_recent(session_id: str) -> Optional[list]:
         return None
 
 
-def cache_set_recent(session_id: str, messages_data: list) -> None:
+async def cache_set_recent(session_id: str, messages_data: list) -> None:
     """Stocke les messages récents dans Redis."""
     key = _redis_key(session_id, "recent")
     try:
-        cache.set(key, json.dumps(messages_data, default=str), timeout=SESSION_TTL)
+        await cache.aset(key, json.dumps(messages_data, default=str), timeout=SESSION_TTL)
     except Exception as e:
         logger.warning(f"Redis cache_set_recent failed: {e}")
 
 #Supprimer tout le cache d’une session.
-def cache_invalidate(session_id: str) -> None:
+async def cache_invalidate(session_id: str) -> None:
     """Invalide tout le cache d'une session (après mise à jour majeure)."""
     for suffix in ("summary", "recent", "meta"):
         try:
-            cache.delete(_redis_key(session_id, suffix))
+            await cache.adelete(_redis_key(session_id, suffix))
         except Exception:
             pass
 
@@ -247,7 +247,7 @@ def build_summary_prompt(messages_to_summarize: list, existing_summary: Optional
         )
 
 
-def generate_summary(messages_to_summarize: list, existing_summary: Optional[str], llm) -> str:
+async def generate_summary(messages_to_summarize: list, existing_summary: Optional[str], llm) -> str:
     """
     Génère un résumé compressé via le LLM.
     Retourne le résumé ou une version de fallback si le LLM échoue.
@@ -258,7 +258,7 @@ def generate_summary(messages_to_summarize: list, existing_summary: Optional[str
     prompt = build_summary_prompt(messages_to_summarize, existing_summary)
 
     try:
-        response = llm.invoke(prompt)
+        response = await llm.ainvoke(prompt)
         summary = response.content.strip()
         # Tronquer si trop long (sécurité)
         max_chars = SUMMARY_MAX_TOKENS * CHARS_PER_TOKEN
@@ -309,14 +309,15 @@ class MemoryManager:
     def __init__(self, llm):
         self.llm = llm
 
-    def build_context(self, conversation, new_message: str):
+    async def build_context(self, conversation, new_message: str):
+        from asgiref.sync import sync_to_async
         session_id = str(conversation.session_id)
-        all_db_msgs = list(conversation.messages.order_by('created_at'))
+        # Fetch messages asynchronously
+        all_db_msgs = await sync_to_async(list)(conversation.messages.order_by('created_at'))
         total = len(all_db_msgs)
     
         if total == 0:
-            # Même si pas de messages, inclure le résumé archivé si présent
-            pg_summary = getattr(conversation, 'summary', '') or ''
+            pg_summary = await sync_to_async(getattr)(conversation, 'summary', '') or ''
             context = []
             if pg_summary:
                 from langchain_core.messages import SystemMessage
@@ -333,13 +334,11 @@ class MemoryManager:
         recent_lc    = self._db_to_langchain(recent_msgs)
     
         summary_msg = None
-        pg_summary  = getattr(conversation, 'summary', '') or ''
+        pg_summary  = await sync_to_async(getattr)(conversation, 'summary', '') or ''
     
         # Résumé si : anciens msgs présents OU résumé archivé en PG
         if (old_msgs and total > SUMMARY_TRIGGER) or pg_summary:
-
-            # Construire le résumé à partir du cache Redis ou en générant via LLM
-            summary_text = self._get_or_build_summary(
+            summary_text = await self._get_or_build_summary(
                 session_id,
                 old_msgs,
                 conversation=conversation,   # ← on passe la conversation pour lire .summary
@@ -356,13 +355,12 @@ class MemoryManager:
             new_message=new_message,
         )
     
-        self._refresh_recent_cache(session_id, recent_msgs)
+        await self._refresh_recent_cache(session_id, recent_msgs)
         return context
-    
 
-    def invalidate_session(self, session_id: str) -> None:
+    async def invalidate_session(self, session_id: str) -> None:
         """Invalide le cache Redis d'une session (ex: après suppression)."""
-        cache_invalidate(session_id)
+        await cache_invalidate(session_id)
 
     # ──────────────────────────────────────────────────────────────────────────
     # MÉTHODES PRIVÉES
@@ -378,7 +376,7 @@ class MemoryManager:
                 result.append(AIMessage(content=msg.content))
         return result
 
-    def _get_or_build_summary(self, session_id: str, old_msgs, conversation=None) -> str:
+    async def _get_or_build_summary(self, session_id: str, old_msgs, conversation=None) -> str:
         """
         Priorité de lecture du résumé :
         1. Redis (cache chaud, ~1ms)
@@ -389,33 +387,33 @@ class MemoryManager:
         Il sert de base pour le résumé incrémental des messages encore présents.
         """
         # 1. Cache Redis
-        cached = cache_get_summary(session_id)
+        cached = await cache_get_summary(session_id)
         if cached:
             logger.debug(f"[Memory] Redis HIT for {session_id[:8]}")
             return cached
     
-        # 2. Résumé archivé dans PG (base de départ si archivage a eu lieu)
+        # 2. Résumé archivé dans PG
         pg_summary = ""
-        if conversation and hasattr(conversation, 'summary'):
-            pg_summary = conversation.summary or ""
+        if conversation:
+            from asgiref.sync import sync_to_async
+            pg_summary = await sync_to_async(getattr)(conversation, 'summary', '') or ""
     
         # 3. Générer le résumé des messages anciens encore en base
         old_lc = self._db_to_langchain(old_msgs)
     
         if not old_lc and pg_summary:
             # Archivage total — plus rien à résumer, juste le résumé PG
-            cache_set_summary(session_id, pg_summary)
+            await cache_set_summary(session_id, pg_summary)
             return pg_summary
     
-        summary = generate_summary(
+        summary = await generate_summary(
             messages_to_summarize=old_lc,
-            existing_summary=pg_summary or None,  # combine avec l'archivé si existe
+            existing_summary=pg_summary or None,
             llm=self.llm,
         )
     
-        cache_set_summary(session_id, summary)
+        await cache_set_summary(session_id, summary)
         return summary
- 
 
     def _assemble_within_budget(
         self,
@@ -452,8 +450,7 @@ class MemoryManager:
                 context_parts.append(SystemMessage(content=truncated + "..."))
                 available = 0
 
-        # Ajouter les messages récents (du plus ancien au plus récent)
-        # On part de la fin pour garantir les plus récents
+        # Ajouter les messages récents
         selected_recent = []
         min_recent = min(4, len(recent_messages))  # garder au moins 2 échanges
 
@@ -463,12 +460,11 @@ class MemoryManager:
                 selected_recent.insert(0, msg)
                 available -= tokens
             else:
-                break  # budget épuisé
+                break
 
         context_parts.extend(selected_recent)
         context_parts.append(HumanMessage(content=new_message))
 
-        # Log pour monitoring
         total_tokens = TOKEN_BUDGET - available + new_msg_tokens
         logger.info(
             f"[Memory] Context built: {len(context_parts)} messages, "
@@ -477,10 +473,10 @@ class MemoryManager:
 
         return context_parts
 
-    def _refresh_recent_cache(self, session_id: str, recent_db_msgs) -> None:
+    async def _refresh_recent_cache(self, session_id: str, recent_db_msgs) -> None:
         """Met à jour le cache Redis des messages récents."""
         recent_data = [
             {"role": msg.role, "content": msg.content}
             for msg in recent_db_msgs
         ]
-        cache_set_recent(session_id, recent_data)
+        await cache_set_recent(session_id, recent_data)

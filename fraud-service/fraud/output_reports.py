@@ -134,8 +134,21 @@ def _build_fraud_excel(
             sig_df = pd.DataFrame({"Signal": ["Aucun signal détecté"], "Points": [0]})
         sig_df.to_excel(writer, sheet_name="Signaux Comportementaux", index=False)
 
+        # ── Strip Timezones ──────────────────────────────────────────────────
+        export_df = df.copy()
+        for col in export_df.select_dtypes(include=['datetimetz', 'datetime', 'object']).columns:
+            try:
+                if pd.api.types.is_datetime64tz_dtype(export_df[col]):
+                    export_df[col] = export_df[col].dt.tz_localize(None)
+                elif pd.api.types.is_object_dtype(export_df[col]):
+                    temp = pd.to_datetime(export_df[col], errors='ignore')
+                    if pd.api.types.is_datetime64tz_dtype(temp):
+                        export_df[col] = temp.dt.tz_localize(None)
+            except Exception:
+                pass
+
         # ── Onglet 4 : Transactions (toutes) ─────────────────────────────────
-        df.to_excel(writer, sheet_name="Transactions", index=False)
+        export_df.to_excel(writer, sheet_name="Transactions", index=False)
 
         # ── Onglet 5 : Transactions Suspectes ────────────────────────────────
         flagged_idx: set = set()
@@ -155,7 +168,21 @@ def _build_fraud_excel(
             df.loc[sorted(flagged_idx)] if flagged_idx
             else pd.DataFrame(columns=df.columns)
         )
-        flagged_df.to_excel(writer, sheet_name="Transactions Suspectes", index=False)
+        
+        # ── Strip Timezones for flagged_df ──
+        export_flagged_df = flagged_df.copy()
+        for col in export_flagged_df.select_dtypes(include=['datetimetz', 'datetime', 'object']).columns:
+            try:
+                if pd.api.types.is_datetime64tz_dtype(export_flagged_df[col]):
+                    export_flagged_df[col] = export_flagged_df[col].dt.tz_localize(None)
+                elif pd.api.types.is_object_dtype(export_flagged_df[col]):
+                    temp = pd.to_datetime(export_flagged_df[col], errors='ignore')
+                    if pd.api.types.is_datetime64tz_dtype(temp):
+                        export_flagged_df[col] = temp.dt.tz_localize(None)
+            except Exception:
+                pass
+
+        export_flagged_df.to_excel(writer, sheet_name="Transactions Suspectes", index=False)
 
         # ── Onglet 6 : Résumé Compte ─────────────────────────────────────────
         amounts_num = pd.to_numeric(df.get(amount_col, pd.Series(dtype=float)),

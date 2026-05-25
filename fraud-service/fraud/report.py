@@ -23,6 +23,25 @@ def ensure_reports_dir():
     REPORTS_DIR.mkdir(parents=True, exist_ok=True)
 
 
+def _strip_tz(df: pd.DataFrame) -> pd.DataFrame:
+    """Excel doesn't support TZ-aware datetimes. Strip them."""
+    for col in df.select_dtypes(include=['datetimetz', 'datetime', 'object']).columns:
+        try:
+            # If it's a string that looks like a datetime with TZ, this will convert it and strip
+            # But mostly we care about actual datetimetz columns
+            if pd.api.types.is_datetime64tz_dtype(df[col]):
+                df[col] = df[col].dt.tz_localize(None)
+            elif pd.api.types.is_object_dtype(df[col]):
+                # Fallback: maybe it's string format ISO8601 with timezone
+                # Just convert and strip if it parses
+                temp = pd.to_datetime(df[col], errors='ignore')
+                if pd.api.types.is_datetime64tz_dtype(temp):
+                    df[col] = temp.dt.tz_localize(None)
+        except Exception:
+            pass
+    return df
+
+
 def generate_transaction_export(
     df: pd.DataFrame,
     iban: str,
@@ -39,7 +58,8 @@ def generate_transaction_export(
 
     with pd.ExcelWriter(filepath, engine="openpyxl") as writer:
         # ── Sheet 1: Transactions ──
-        df.to_excel(writer, sheet_name="Transactions", index=False)
+        export_df = _strip_tz(df.copy())
+        export_df.to_excel(writer, sheet_name="Transactions", index=False)
 
         # ── Sheet 2: Summary ──
         summary_data = {
@@ -112,6 +132,7 @@ def generate_master_fraud_report(
                 # Flagged transactions if available
                 if "transactions_raw" in res and res["transactions_raw"]:
                     df = pd.DataFrame(res["transactions_raw"])
+                    df = _strip_tz(df)
                     # Simple filter for high risk transactions in this sheet
                     high_risk_tx = df.copy()
                     if "transaction_amount" in high_risk_tx.columns:
@@ -199,7 +220,8 @@ def generate_fraud_report(
         signals_df.to_excel(writer, sheet_name="Signaux Comportementaux", index=False)
 
         # ── Sheet 4: All Transactions ──
-        df.to_excel(writer, sheet_name="Transactions", index=False)
+        export_df = _strip_tz(df.copy())
+        export_df.to_excel(writer, sheet_name="Transactions", index=False)
 
         # ── Sheet 5: Flagged Transactions ──
         # Flagged = transactions that triggered the high-score rules
@@ -221,10 +243,11 @@ def generate_fraud_report(
             flagged_indices.update(df[drain_mask].index.tolist())
 
         if flagged_indices:
-            flagged_df = df.loc[sorted(flagged_indices)]
+            flagged_df = df.loc[sorted(flagged_indices)].copy()
         else:
             flagged_df = pd.DataFrame(columns=df.columns)
 
+        flagged_df = _strip_tz(flagged_df)
         flagged_df.to_excel(writer, sheet_name="Transactions Suspectes", index=False)
 
         # ── Sheet 6: Regulatory Thresholds Reference ──
