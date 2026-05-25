@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 FRAUD_SERVICE_URL = os.getenv("FRAUD_SERVICE_URL", "http://fraud-service:8001")
 MAIL_SERVICE_URL  = os.getenv("MAIL_SERVICE_URL",  "http://mail-service:8002")
-ALERT_EMAIL       = os.getenv("ALERT_EMAIL",        "compliance@yourbank.com")
+ALERT_EMAIL       = os.getenv("ALERT_EMAIL",        "[EMAIL_ADDRESS]")
 
 
 

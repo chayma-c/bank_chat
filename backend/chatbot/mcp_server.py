@@ -9,6 +9,7 @@ logger = logging.getLogger("mcp_search_server")
 # Initialisation du serveur MCP
 mcp = FastMCP("BankChat Search")
 
+
 @mcp.tool()
 def web_search(query: str, max_results: int = 5) -> str:
     """

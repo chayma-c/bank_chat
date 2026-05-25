@@ -12,7 +12,7 @@ services:
       POSTGRES_DB: postgres
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./postgres/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql
+      - ./postgres:/docker-entrypoint-initdb.d/
     ports:
       - "5432:5432"
     healthcheck:
@@ -179,7 +179,7 @@ services:
       redis:
         condition: service_healthy
       keycloak:
-        condition: service_started  # ← Changé de service_healthy à service_started
+        condition: service_started  
       fraud-service:
         condition: service_healthy
       mail-service:
@@ -252,7 +252,7 @@ services:
       - bank_network
 
   # ══════════════════════════════════════════════════════════════════════════
-  # 💻 FRONTEND ANGULAR
+  # FRONTEND
   # ══════════════════════════════════════════════════════════════════════════
   frontend:
     build:
@@ -263,13 +263,13 @@ services:
       - "4200:80"
     depends_on:
       api-gateway:
-        condition: service_started   # relaxed: don't block on gateway health
+        condition: service_started   
     restart: unless-stopped
     networks:
       - bank_network
 
 # ══════════════════════════════════════════════════════════════════════
-# 🧠 TEXT-TO-SQL SERVICE (Analyse en langage naturel)
+# TEXT-TO-SQL SERVICE
 # ══════════════════════════════════════════════════════════════════════
   text-to-sql-service:
     build:

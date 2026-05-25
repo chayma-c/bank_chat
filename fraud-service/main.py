@@ -24,6 +24,7 @@ from typing import Optional
 import asyncio
 from fraud.db import init_db, get_settings, update_settings
 from fraud.scheduler import scheduler_loop, run_global_analysis_task
+from fraud.loader import seed_transactions_from_csv
 from fraud.auth import require_bank_agent
 from sqlalchemy import desc
 from fraud.mail_log_service import MailLogService
@@ -51,10 +52,18 @@ async def lifespan(app: FastAPI):
 
     try:
         init_db()
+        
+        # Seed transactions from CSV into DB if not already done
+        db_seed = SessionLocal()
+        try:
+            seed_transactions_from_csv(db_seed)
+        finally:
+            db_seed.close()
+
         asyncio.create_task(scheduler_loop())
         logger.info("Fraud scheduler loop started.")
     except Exception as e:
-        logger.error(f"Could not start scheduler: {e}")
+        logger.error(f"Could not start scheduler or seed data: {e}")
 
     yield
     logger.info("Fraud service shutting down.")

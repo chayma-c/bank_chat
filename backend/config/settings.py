@@ -40,20 +40,31 @@ CACHES = {
     }
 }
  
-# ── Logging mémoire (optionnel mais recommandé pour monitoring) ───────────────
+# ── Logging configuration ───────────────────────────────────────────────────
 LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,
+    "formatters": {
+        "verbose": {
+            "format": "{levelname} {asctime} {module} {process:d} {thread:d} {message}",
+            "style": "{",
+        },
+    },
     "handlers": {
         "console": {
             "class": "logging.StreamHandler",
         },
     },
     "loggers": {
-        "chatbot.memory_manager": {
+        "chatbot": {
             "handlers": ["console"],
-            "level": os.getenv("MEMORY_LOG_LEVEL", "INFO"),
-            "propagate": False,
+            "level": "INFO",
+            "propagate": True,
+        },
+        "django": {
+            "handlers": ["console"],
+            "level": "INFO",
+            "propagate": True,
         },
     },
 }

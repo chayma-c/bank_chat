@@ -31,7 +31,7 @@ with patch('chatbot.graph.nodes.llm') as mock_llm, \
     
     print("--- Test Case 1: TALK ---")
     results = list(stream_agent_response("fraud", messages))
-    for token, agent in results:
+    for token, agent, *extra in results:
         print(f"[{agent}] {token}")
 
     # Test Case 2: ANALYZE decision
@@ -43,5 +43,5 @@ with patch('chatbot.graph.nodes.llm') as mock_llm, \
     
     print("\n--- Test Case 2: ANALYZE ---")
     results = list(stream_agent_response("fraud", messages))
-    for token, agent in results:
+    for token, agent, *extra in results:
         print(f"[{agent}] {token}")

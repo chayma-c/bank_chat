@@ -222,6 +222,7 @@
             (ngModelChange)="selectedAgent.set($event)"
             [disabled]="sending()">
             <option value="auto">Auto-Detect</option>
+            <option value="search">Web Search Agent</option>
             @if (isBankAgent) {
               <option value="fraud">Fraud Detection Agent</option>
             }
