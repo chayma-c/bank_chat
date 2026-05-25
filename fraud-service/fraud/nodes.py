@@ -353,91 +353,6 @@ def export_transactions(state: FraudAgentState) -> dict:
         return {"error": f"Erreur export : {exc}"}
 
 
-def _save_decision_log(state: FraudAgentState, summary: str) -> None:
-    """
-    Persiste l'analyse dans fraud_decision_logs.
-    Non bloquant — ne lève jamais d'exception.
-    """
-    try:
-        from .models import FraudDecisionLog
-        db = SessionLocal()
-        try:
-            fraud_results  = state.get("fraud_results", [])
-            triggered      = [r for r in fraud_results if r.get("triggered")]
-            account_sum    = state.get("account_summary") or {}
-
-            log = FraudDecisionLog(
-                id                     = str(_uuid.uuid4()),
-                user_id                = state.get("user_id"),
-                session_id             = state.get("session_id"),
-                iban                   = state.get("iban", ""),
-                transactions_count     = state.get("transactions_count", 0),
-                date_range             = account_sum.get("date_range"),
-                score_behavioral       = state.get("score_behavioral", 0),
-                score_aml              = state.get("score_aml", 0),
-                score_final            = state.get("score_final", 0),
-                risk_level             = state.get("risk_level", ""),
-                tracfin_required       = state.get("tracfin_required", False),
-                rules_triggered        = len(triggered),
-                rules_evaluated        = len(fraud_results),
-                triggered_rules_detail = [
-                    {
-                        "rule":     r.get("rule_name", r.get("rule", "")),
-                        "domain":   r.get("domain", ""),
-                        "points":   r.get("points", 0),
-                        "severity": r.get("severity", ""),
-                        "details":  r.get("details", ""),
-                    }
-                    for r in triggered
-                ],
-                report_path            = state.get("report_path"),
-                download_url           = state.get("download_url"),
-                # mail_* rempli plus tard par mail_agent via update_decision_log_mail()
-                mail_sent              = False,
-                llm_summary            = summary,
-                error                  = state.get("error"),
-            )
-            db.add(log)
-            db.commit()
-            logger.info(f"[decision_log] Saved log {log.id} for IBAN={log.iban}")
-            # Stocker l'ID dans le state pour que mail_agent puisse le retrouver
-            state["decision_log_id"] = log.id
-        finally:
-            db.close()
-    except Exception as e:
-        logger.warning(f"[decision_log] Failed to save (non-blocking): {e}")
-
-
-def update_decision_log_mail(
-    log_id: str,
-    mail_sent: bool,
-    mail_recipient: str,
-    mail_template: str,
-    mail_status: str,
-    mail_id: str | None,
- ) -> None:
-    """
-    Met à jour les colonnes mail_* d'un decision log existant.
-    Appelé par mail_agent (nodes.py backend) après l'envoi.
-    """
-    try:
-        from .models import FraudDecisionLog
-        db = SessionLocal()
-        try:
-            log = db.query(FraudDecisionLog).filter(FraudDecisionLog.id == log_id).first()
-            if log:
-                log.mail_sent      = mail_sent
-                log.mail_recipient = mail_recipient
-                log.mail_template  = mail_template
-                log.mail_status    = mail_status
-                log.mail_id        = mail_id
-                db.commit()
-                logger.info(f"[decision_log] Updated mail info for log {log_id}")
-        finally:
-            db.close()
-    except Exception as e:
-        logger.warning(f"[decision_log] Failed to update mail info: {e}")
-
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Nœud 4 — generate_summary
@@ -506,4 +421,48 @@ TON : Clinique, autoritaire, expert, sans fioritures."""
     if download_url:
         summary += f"\n\n📥 [Télécharger le rapport Excel]({download_url})"
 
-    return {"llm_summary": summary}
+    # ── Sauvegarder dans le decision log via MailLogService ──────────────────
+    decision_log_id = ""
+    try:
+        from .mail_log_service import MailLogService
+        db = SessionLocal()
+        try:
+            svc = MailLogService(db)
+            triggered_rules_detail = [
+                {
+                    "rule":     r.get("rule_name", r.get("rule", "")),
+                    "domain":   r.get("domain", ""),
+                    "points":   r.get("points", 0),
+                    "severity": r.get("severity", ""),
+                    "details":  r.get("details", ""),
+                }
+                for r in triggered_rules
+            ]
+            decision_log_id = svc.create_pending(
+                iban                   = state.get("iban", ""),
+                user_id                = state.get("user_id"),
+                session_id             = state.get("session_id"),
+                transactions_count     = state.get("transactions_count", 0),
+                date_range             = account_sum.get("date_range"),
+                score_behavioral       = state.get("score_behavioral", 0),
+                score_aml              = state.get("score_aml", 0),
+                score_final            = state.get("score_final", 0),
+                risk_level             = state.get("risk_level", ""),
+                tracfin_required       = state.get("tracfin_required", False),
+                rules_triggered        = len(triggered_rules),
+                rules_evaluated        = len(fraud_results),
+                triggered_rules_detail = triggered_rules_detail,
+                report_path            = state.get("report_path"),
+                download_url           = state.get("download_url"),
+                llm_summary            = summary,
+                error                  = state.get("error"),
+            )
+        finally:
+            db.close()
+    except Exception as e:
+        logger.warning(f"[generate_summary] Failed to save decision log: {e}")
+
+    return {
+        "llm_summary": summary,
+        "decision_log_id": decision_log_id
+    }

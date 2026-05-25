@@ -1,0 +1,85 @@
+version: "3.8"
+
+services:
+# 🗄️ BASE DE DONNÉES POSTGRESQL
+  db:
+    image: postgres:16-alpine
+    container_name: bank_chat_db
+    environment:
+      POSTGRES_DB: postgres
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+
+  # 🔴 REDIS (Cache de session)
+  redis:
+    image: redis:7-alpine
+    container_name: bank_chat_redis
+    ports:
+      - "6379:6379"
+
+  # 🔐 KEYCLOAK (Gestionnaire d'identité)
+  keycloak:
+    image: quay.io/keycloak/keycloak:latest
+    container_name: bank_chat_keycloak
+    environment:
+      KC_DB_URL: jdbc:postgresql://db:5432/keycloak_db
+    depends_on:
+      db:
+        condition: service_healthy
+
+  # 🚨 FRAUD SERVICE (Détection de fraude)
+  fraud-service:
+    build: ./fraud-service
+    container_name: bank_chat_fraud
+    environment:
+      DATABASE_URL: postgresql://fraud_user:password@db:5432/banking_data
+    depends_on:
+      db:
+        condition: service_healthy
+
+  # de meme pour le mail-service et text-to-sql-service
+  # 🤖 ORCHESTRATEUR DJANGO (Backend principal)
+  orchestrateur:
+    build: ./backend
+    container_name: bank_chat_orchestrateur
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      FRAUD_SERVICE_URL: http://fraud-service:8001
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # 🌐 API GATEWAY (Nginx Reverse Proxy)
+  api-gateway:
+    build: ./api-gateway
+    container_name: bank_chat_gateway
+    ports:
+      - "80:80"
+    depends_on:
+      orchestrateur:
+        condition: service_healthy
+
+  # 💻 FRONTEND ANGULAR
+  frontend:
+    build: ./frontend
+    container_name: bank_chat_frontend
+    ports:
+      - "4200:80"
+    depends_on:
+      api-gateway:
+        condition: service_started
+
+# 📦 VOLUMES & RÉSEAUX
+volumes:
+  postgres_data:
+    driver: local
+
+networks:
+  bank_network:
+    driver: bridge

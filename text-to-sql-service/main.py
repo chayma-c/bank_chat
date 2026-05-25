@@ -125,6 +125,99 @@ class ValidationErrorResponse(BaseModel):
     error:    str
 
 
+# ── Helpers ──────────────────────────────────────────────────────────────────
+
+_ERROR_TYPE_ICONS: dict[str, str] = {
+    "dml_blocked":    "🚫",
+    "stacked":        "🚫",
+    "no_select":      "🚫",
+    "system_table":   "🔒",
+    "dangerous_func": "🔒",
+    "expensive":      "⚠️",
+    "unknown_table":  "📊",
+    "no_table":       "📊",
+    "hallucination":  "❓",
+    "empty":          "⚠️",
+}
+
+_ERROR_TYPE_TITLES: dict[str, str] = {
+    "dml_blocked":    "Opération non autorisée",
+    "stacked":        "Requêtes multiples bloquées",
+    "no_select":      "Opération non autorisée",
+    "system_table":   "Accès système interdit",
+    "dangerous_func": "Fonction système interdite",
+    "expensive":      "Requête trop coûteuse",
+    "unknown_table":  "Table hors périmètre",
+    "no_table":       "Aucune table reconnue",
+    "hallucination":  "Colonne inconnue dans le schéma",
+    "empty":          "Requête vide",
+}
+
+_ERROR_TYPE_GUIDANCE: dict[str, str] = {
+    "dml_blocked": (
+        "Je suis désolé, mais je ne peux pas exécuter des opérations "
+        "de modification (DELETE, UPDATE, INSERT, DROP…). "
+        "Ce système est en **lecture seule** pour protéger l'intégrité des données bancaires. "
+        "Reformulez votre question sous forme de consultation."
+    ),
+    "stacked": (
+        "Votre requête contient plusieurs instructions séparées par `;`. "
+        "Pour des raisons de sécurité, seule **une seule requête SELECT** est acceptée à la fois."
+    ),
+    "no_select": (
+        "Seules les requêtes **SELECT** sont autorisées dans ce système. "
+        "Les opérations d'écriture sont strictement interdites."
+    ),
+    "system_table": (
+        "L'accès aux tables système PostgreSQL (`pg_*`, `information_schema`) est interdit. "
+        "Veuillez formuler votre question en utilisant les tables bancaires disponibles."
+    ),
+    "dangerous_func": (
+        "Cette requête utilise une fonction système interdite pour des raisons de sécurité."
+    ),
+    "expensive": (
+        "Cette requête génèrerait un produit cartésien (CROSS JOIN) pouvant saturer la base. "
+        "Précisez votre question pour cibler les données souhaitées."
+    ),
+    "unknown_table": (
+        "La table demandée ne fait pas partie du périmètre autorisé. "
+        "Les tables accessibles sont : **transactions**, **fraud_rules**, **fraud_decision_logs**."
+    ),
+    "no_table": (
+        "Aucune table bancaire n'a été identifiée dans la requête. "
+        "Reformulez votre question en ciblant : transactions, fraud\_rules ou fraud\_decision\_logs."
+    ),
+    "hallucination": (
+        "La question fait référence à une colonne qui **n'existe pas** dans le schéma bancaire. "
+        "Seules les colonnes listées ci-dessous sont disponibles."
+    ),
+    "empty": "La question est vide. Veuillez poser une question.",
+}
+
+
+def _friendly_validation_error(validation, sql: str) -> str:
+    """
+    Construit un message d'erreur UI convivial et contextualisé à partir
+    du ValidationResult, en utilisant error_type pour choisir le bon message.
+    """
+    etype = getattr(validation, "error_type", "") or ""
+    icon    = _ERROR_TYPE_ICONS.get(etype, "⛔")
+    title   = _ERROR_TYPE_TITLES.get(etype, "Requête rejetée")
+    guidance = _ERROR_TYPE_GUIDANCE.get(etype, "")
+    technical = validation.error
+
+    parts = [f"{icon} **{title}**"]
+    if guidance:
+        parts.append(f"\n{guidance}")
+    # Détail technique en bloc repliable pour ne pas surcharger l'interface
+    parts.append(
+        f"\n\n<details>\n<summary>Détail technique</summary>\n\n"
+        f"> {technical}\n\n"
+        f"**SQL généré :**\n```sql\n{sql}\n```\n</details>"
+    )
+    return "\n".join(parts)
+
+
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 
 @app.post(
@@ -136,11 +229,11 @@ class ValidationErrorResponse(BaseModel):
         "validates it for security, executes it, and returns formatted results. "
         "Requires bank_agent or admin JWT token."
     ),
-)
+    )
 async def query_endpoint(
     req: QueryRequest,
     user: dict = Depends(require_bank_agent),
-) -> QueryResponse:
+    ) -> QueryResponse:
     start = time.perf_counter()
     user_sub = user.get("sub", req.user_id)
     logger.info(
@@ -168,13 +261,9 @@ async def query_endpoint(
     if not validation.is_valid:
         duration_ms = (time.perf_counter() - start) * 1000
         logger.warning(
-            f"[/query] Validation rejected — {validation.error}"
+            f"[/query] Validation rejetée [{validation.error_type}] — {validation.error}"
         )
-        error_msg = (
-            f"⛔ Requête SQL rejetée par le validateur de sécurité.\n\n"
-            f"**Raison :** {validation.error}\n\n"
-            f"**SQL généré :**\n```sql\n{sql}\n```"
-        )
+        error_msg = _friendly_validation_error(validation, sql)
         return QueryResponse(
             question=req.question, sql=sql, explanation=error_msg,
             summary=validation.error, table="", columns=[], rows=[],

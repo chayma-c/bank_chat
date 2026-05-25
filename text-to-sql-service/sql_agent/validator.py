@@ -76,6 +76,19 @@ EXPENSIVE_PATTERNS = [
 class ValidationResult:
     is_valid:    bool
     error:       str = ""
+    # Catégorie de l'erreur — utilisée par main.py et nodes.py pour
+    # afficher un message convivial adapté au contexte :
+    #   "dml_blocked"    → DELETE / UPDATE / INSERT / DROP / etc.
+    #   "stacked"        → requêtes multiples via ;
+    #   "no_select"      → requête ne commence pas par SELECT
+    #   "system_table"   → accès pg_* / information_schema
+    #   "dangerous_func" → pg_read_file, dblink, …
+    #   "expensive"      → CROSS JOIN, …
+    #   "unknown_table"  → table absente de la whitelist
+    #   "no_table"       → aucune table référencée
+    #   "hallucination"  → colonne inconnue dans le schéma
+    #   ""               → succès (is_valid=True)
+    error_type:  str = ""
     cleaned_sql: str = ""
     warnings:    list = field(default_factory=list)
 
@@ -121,25 +134,31 @@ def _rewrite_select_star(sql: str, table_refs: list[str]) -> tuple[str, list[str
     return rewritten, warnings
 
 
-def _validate_columns(sql: str, table_refs: list[str]) -> list[str]:
+def _validate_columns(sql: str, table_refs: list[str]) -> ValidationResult | None:
     """
-    Detect column hallucinations: column names used in the query that don't
-    exist in the known schema for the referenced tables.
+    Détecte les hallucinations de colonnes : noms de colonnes utilisés dans la
+    requête qui n'existent pas dans le schéma connu des tables référencées.
 
-    Returns a list of warning strings (empty if all columns are valid).
-    This is a best-effort check — it may have false positives for aliases/subqueries.
+    Retourne :
+      - None  si toutes les colonnes sont valides (ou non vérifiables)
+      - ValidationResult(is_valid=False, error_type="hallucination", …)
+        si des colonnes inconnues sont trouvées.
+
+    ⚠️  Ce contrôle est désormais BLOQUANT : une requête avec des colonnes
+    inconnues est rejetée AVANT d'être envoyée à PostgreSQL.
+    Heuristique : on ne vérifie que la clause SELECT (avant FROM) pour
+    limiter les faux-positifs liés aux alias ou aux sous-requêtes.
     """
-    # Build the set of all valid columns for the referenced tables
+    # Construire l'ensemble des colonnes valides pour les tables référencées
     valid_cols: set[str] = set()
     for table in table_refs:
         valid_cols.update(ALLOWED_COLUMNS.get(table.lower(), []))
 
     if not valid_cols:
-        return []
+        # Schéma inconnu pour ces tables → on ne peut pas vérifier, on laisse passer
+        return None
 
-    # Extract identifiers that look like column references
-    # Strategy: find tokens after SELECT ... FROM that are bare identifiers
-    # We use a heuristic: find all word-tokens not in SQL keywords or table names
+    # Mots-clés SQL et fonctions à ignorer lors de l'analyse de la clause SELECT
     sql_keywords = {
         "select", "from", "where", "and", "or", "not", "in", "is", "null",
         "true", "false", "like", "ilike", "between", "as", "on", "join",
@@ -148,17 +167,22 @@ def _validate_columns(sql: str, table_refs: list[str]) -> list[str]:
         "upper", "lower", "trim", "now", "date_trunc", "extract", "interval",
         "case", "when", "then", "else", "end", "cast", "asc", "desc",
         "with", "union", "all", "exists", "coalesce", "nullif",
+        # Fonctions supplémentaires fréquentes
+        "round", "floor", "ceil", "length", "substr", "replace",
+        "to_char", "to_date", "to_timestamp", "age", "date_part",
+        "current_date", "current_timestamp", "greatest", "least",
+        "array_agg", "string_agg", "json_agg", "jsonb_agg",
     }
     all_table_names = {t.lower() for t in ALLOWED_TABLES}
 
-    # Only check the SELECT clause (before FROM)
+    # Analyser uniquement la clause SELECT (avant FROM)
     select_match = re.match(r"SELECT\s+(.*?)\s+FROM\b", sql, re.IGNORECASE | re.DOTALL)
     if not select_match:
-        return []
+        return None
 
     select_clause = select_match.group(1)
 
-    # Extract bare identifiers (not SQL keywords, not numbers, not strings)
+    # Extraire les identifiants bruts (exclusion des mots-clés, nombres, chaînes)
     candidate_cols = re.findall(r"\b([a-zA-Z_][a-zA-Z0-9_]*)\b", select_clause)
 
     hallucinations = []
@@ -173,86 +197,96 @@ def _validate_columns(sql: str, table_refs: list[str]) -> list[str]:
             hallucinations.append(col)
 
     if hallucinations:
-        logger.warning(f"[validator] Potential hallucination columns: {hallucinations}")
-        return [
-            f"⚠️ Colonne(s) inconnue(s) détectée(s) : {', '.join(set(hallucinations))}. "
-            f"Colonnes disponibles : {', '.join(sorted(valid_cols))}."
-        ]
-    return []
+        unknown = ", ".join(sorted(set(hallucinations)))
+        available = ", ".join(sorted(valid_cols))
+        tables_str = ", ".join(sorted(set(table_refs)))
+        logger.warning(f"[validator] Colonnes inconnues BLOQUÉES : {hallucinations}")
+        return ValidationResult(
+            is_valid=False,
+            error_type="hallucination",
+            error=(
+                f"Colonne(s) inconnue(s) dans le schéma : {unknown}. "
+                f"Colonnes disponibles pour [{tables_str}] : {available}."
+            ),
+        )
+    return None
 
 
 def validate_sql(sql: str) -> ValidationResult:
     """
-    Full security validation pipeline.
+    Pipeline complet de validation de sécurité SQL.
 
-    Returns a ValidationResult with:
-      - is_valid=True  + cleaned_sql if safe to execute
-      - is_valid=False + error message if rejected
-      - warnings: non-blocking notices (hallucinations, SELECT * rewrite, etc.)
+    Retourne un ValidationResult avec :
+      - is_valid=True  + cleaned_sql   → requête sûre, prête à l'exécution
+      - is_valid=False + error         → requête rejetée (+ error_type pour message UI adapté)
+      - warnings                       → avis non-bloquants (réécriture SELECT *, LIMIT auto)
     """
     warnings: list[str] = []
 
     if not sql or not sql.strip():
-        return ValidationResult(is_valid=False, error="La requête SQL est vide.")
+        return ValidationResult(
+            is_valid=False, error_type="empty",
+            error="La requête SQL est vide.",
+        )
 
-    # ── 1. Normalize ──────────────────────────────────────────────────────────
+    # ── 1. Normalisation ──────────────────────────────────────────────────────
     cleaned = sql.strip().rstrip(";").strip()
 
-    # ── 2. Block stacked queries ──────────────────────────────────────────────
+    # ── 2. Bloquer les requêtes empilées (stacked queries) ────────────────────
     if ";" in cleaned:
-        logger.warning("[validator] Blocked: stacked queries detected")
+        logger.warning("[validator] Bloqué : requêtes empilées détectées")
         return ValidationResult(
-            is_valid=False,
-            error="Requêtes multiples (;) non autorisées.",
+            is_valid=False, error_type="stacked",
+            error="Requêtes multiples séparées par ';' non autorisées.",
         )
 
     flags = re.IGNORECASE
 
-    # ── 3. Must start with SELECT ─────────────────────────────────────────────
+    # ── 3. Doit commencer par SELECT ──────────────────────────────────────────
     if not re.match(r"^\s*SELECT\b", cleaned, flags):
-        logger.warning("[validator] Blocked: query does not start with SELECT")
+        logger.warning("[validator] Bloqué : requête ne commence pas par SELECT")
         return ValidationResult(
-            is_valid=False,
+            is_valid=False, error_type="no_select",
             error="Seules les requêtes SELECT sont autorisées.",
         )
 
-    # ── 4. Block dangerous DML/DDL keywords ──────────────────────────────────
+    # ── 4. Bloquer les mots-clés DML/DDL dangereux ───────────────────────────
     for pattern in BLOCKED_KEYWORDS:
         if re.search(pattern, cleaned, flags):
             keyword = re.sub(r"\\b", "", pattern).strip()
-            logger.warning(f"[validator] Blocked keyword: {keyword}")
+            logger.warning(f"[validator] Mot-clé bloqué : {keyword}")
             return ValidationResult(
-                is_valid=False,
-                error=f"Mot-clé interdit détecté : {keyword}. "
-                      "Seules les requêtes SELECT sont autorisées.",
+                is_valid=False, error_type="dml_blocked",
+                error=f"Opération interdite détectée : {keyword}. "
+                      "Ce système est en lecture seule — seules les requêtes SELECT sont autorisées.",
             )
 
-    # ── 5. Block system table access ─────────────────────────────────────────
+    # ── 5. Bloquer l'accès aux tables système ────────────────────────────────
     for pattern in BLOCKED_TABLE_PATTERNS:
         if re.search(pattern, cleaned, flags):
-            logger.warning(f"[validator] Blocked system table: {pattern}")
+            logger.warning(f"[validator] Table système bloquée : {pattern}")
             return ValidationResult(
-                is_valid=False,
-                error="Accès aux tables système interdit (pg_*, information_schema).",
+                is_valid=False, error_type="system_table",
+                error="Accès aux tables système interdit (pg_*, information_schema, pg_catalog).",
             )
 
-    # ── 6. Block dangerous functions ─────────────────────────────────────────
+    # ── 6. Bloquer les fonctions dangereuses ─────────────────────────────────
     for pattern in BLOCKED_FUNCTIONS:
         if re.search(pattern, cleaned, flags):
             func = re.sub(r"\\b", "", pattern).strip()
-            logger.warning(f"[validator] Blocked dangerous function: {func}")
+            logger.warning(f"[validator] Fonction dangereuse bloquée : {func}")
             return ValidationResult(
-                is_valid=False,
-                error=f"Fonction interdite : {func}.",
+                is_valid=False, error_type="dangerous_func",
+                error=f"Fonction système interdite : {func}.",
             )
 
-    # ── 7. Block expensive patterns (CROSS JOIN, etc.) ────────────────────────
+    # ── 7. Bloquer les patterns coûteux (CROSS JOIN, …) ──────────────────────
     for pattern, msg in EXPENSIVE_PATTERNS:
         if re.search(pattern, cleaned, flags):
-            logger.warning(f"[validator] Blocked expensive pattern: {pattern}")
-            return ValidationResult(is_valid=False, error=msg)
+            logger.warning(f"[validator] Pattern coûteux bloqué : {pattern}")
+            return ValidationResult(is_valid=False, error_type="expensive", error=msg)
 
-    # ── 8. Whitelist table check ──────────────────────────────────────────────
+    # ── 8. Vérification de la whitelist des tables ────────────────────────────
     table_refs = re.findall(
         r"(?:FROM|JOIN)\s+([a-zA-Z_][a-zA-Z0-9_]*)",
         cleaned,
@@ -260,38 +294,42 @@ def validate_sql(sql: str) -> ValidationResult:
     )
     for table in table_refs:
         if table.lower() not in ALLOWED_TABLES:
-            logger.warning(f"[validator] Blocked: table '{table}' not in whitelist")
+            logger.warning(f"[validator] Table '{table}' absente de la whitelist")
             return ValidationResult(
-                is_valid=False,
-                error=f"Table '{table}' non autorisée. "
-                      f"Tables disponibles : {', '.join(sorted(ALLOWED_TABLES))}.",
+                is_valid=False, error_type="unknown_table",
+                error=(
+                    f"Table '{table}' hors périmètre. "
+                    f"Tables autorisées : {', '.join(sorted(ALLOWED_TABLES))}."
+                ),
             )
 
-    # ── 9. Require at least one whitelisted table ─────────────────────────────
+    # ── 9. Au moins une table whitelistée requise ─────────────────────────────
     if not table_refs:
         return ValidationResult(
-            is_valid=False,
+            is_valid=False, error_type="no_table",
             error="La requête doit référencer au moins une table de la base bancaire.",
         )
 
-    # ── 10. Rewrite SELECT * → explicit columns (non-blocking) ───────────────
+    # ── 10. Réécriture SELECT * → colonnes explicites (non-bloquant) ──────────
     cleaned, star_warnings = _rewrite_select_star(cleaned, table_refs)
     warnings.extend(star_warnings)
 
-    # ── 11. Column hallucination detection (non-blocking warning) ─────────────
-    col_warnings = _validate_columns(cleaned, table_refs)
-    warnings.extend(col_warnings)
+    # ── 11. Détection des colonnes inconnues (BLOQUANT) ───────────────────────
+    #  On vérifie après la réécriture SELECT * pour travailler sur le SQL propre.
+    col_result = _validate_columns(cleaned, table_refs)
+    if col_result is not None:
+        # _validate_columns retourne un ValidationResult(is_valid=False) si hallucination
+        return col_result
 
-    # ── 12. Enforce LIMIT if absent ───────────────────────────────────────────
+    # ── 12. Forcer LIMIT si absent ────────────────────────────────────────────
     if not re.search(r"\bLIMIT\b", cleaned, flags):
-        # Only add LIMIT for non-aggregate queries
         is_aggregate = bool(re.search(
             r"\b(COUNT|SUM|AVG|MIN|MAX|GROUP\s+BY)\b", cleaned, flags
         ))
         if not is_aggregate:
             cleaned += " LIMIT 100"
             warnings.append("ℹ️ LIMIT 100 ajouté automatiquement à la requête.")
-            logger.info("[validator] Auto-added LIMIT 100")
+            logger.info("[validator] LIMIT 100 ajouté automatiquement")
 
-    logger.info(f"[validator] ✅ SQL validated — tables: {table_refs}, warnings: {len(warnings)}")
+    logger.info(f"[validator] ✅ SQL validé — tables: {table_refs}, avertissements: {len(warnings)}")
     return ValidationResult(is_valid=True, cleaned_sql=cleaned, warnings=warnings)

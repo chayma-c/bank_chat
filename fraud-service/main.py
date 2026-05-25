@@ -111,8 +111,7 @@ async def get_fraud_settings():
 @app.post("/settings")
 async def save_fraud_settings(
     data: SettingsUpdate,
-    _user: dict = Depends(require_bank_agent),
-):
+    _user: dict = Depends(require_bank_agent),):
     try:
         update_settings(data.frequency, data.time, data.dayOfWeek)
         return {"status": "success", "message": "Settings updated"}
@@ -169,8 +168,7 @@ class MailUpdatePayload(BaseModel):
 @app.post("/analyze")
 async def analyze(
     req: FraudRequest,
-    _user: dict = Depends(require_bank_agent)
-):
+    _user: dict = Depends(require_bank_agent)):
     iban = req.iban or extract_iban_from_text(req.message)
     if req.message:
         user_content = req.message
@@ -204,7 +202,7 @@ async def analyze(
         "sheet_url":          result.get("sheet_url", ""),
         "drive_url":          result.get("drive_url", ""),
         "output_errors":      result.get("output_errors", []),
-        
+        "decision_log_id":    result.get("decision_log_id", ""),
     }
 
 
@@ -379,7 +377,7 @@ async def update_log_mail(log_id: str, data: MailUpdatePayload, _user: dict = De
     finally:
         db.close()
  
-@app.post("/decision-logs/{log_id}/mail")
+@app.patch("/decision-logs/{log_id}/mail")
 async def update_log_mail_endpoint(
     log_id: str,
     data: MailUpdatePayload,
