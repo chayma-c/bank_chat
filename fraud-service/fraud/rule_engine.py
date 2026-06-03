@@ -642,21 +642,67 @@ def _extract_range(text: str) -> Optional[tuple[float, float]]:
 def _pick_evaluator(rule: FraudRuleModel):
     """
     Selects the evaluation function based on trigger/domain keywords.
-    Order: most specific → most generic.
+
+    Resolution order:
+      1. Keyword matching on trigger text (fast, zero cost)
+      2. LLM intent classifier (only when keywords fail, result cached)
+      3. Domain-based fallback (coarse but deterministic)
+      4. _eval_generic (warning — rule will not trigger)
     """
     t = (rule.trigger + " " + (rule.trigger_detail or "")).lower()
     d = rule.domain.upper()
 
-    # R13 — dormant account (check before 'inactive' could match other things)
+    evaluator = _keyword_match(t, d)
+    if evaluator is not _eval_generic:
+        return evaluator
+
+    # ── LLM fallback: keyword matching failed, ask the model ─────────────────
+    try:
+        from fraud.llm_rule_classifier import classify_rule_intent, EVALUATOR_DESCRIPTIONS
+        key = classify_rule_intent(rule)
+        if key:
+            llm_map = {
+                "large_amount":       _eval_large_amount,
+                "near_threshold":     _eval_near_threshold_amount,
+                "suspicious_iban":    _eval_suspicious_iban,
+                "structuring":        _eval_structuring,
+                "night_transactions": _eval_night_transactions,
+                "foreign_ip":         _eval_foreign_ip,
+                "high_risk_mcc":      _eval_high_risk_mcc,
+                "balance_ratio":      _eval_balance_ratio,
+                "repeated_alerts":    _eval_repeated_alerts,
+                "velocity":           _eval_velocity,
+                "new_beneficiary":    _eval_new_beneficiary,
+                "dormant_account":    _eval_dormant_account,
+                "cross_border":       _eval_cross_border,
+            }
+            resolved = llm_map.get(key)
+            if resolved:
+                logger.info(
+                    f"[rule_engine] LLM resolved rule {rule.id} ('{rule.name}') → {key}"
+                )
+                return resolved
+    except Exception as exc:
+        logger.warning(f"[rule_engine] LLM fallback unavailable for rule {rule.id}: {exc}")
+
+    return evaluator  # _eval_generic with its warning
+
+
+def _keyword_match(t: str, d: str):
+    """
+    Pure keyword dispatch on lowercased trigger text.
+    Returns _eval_generic when no keyword matches (signals 'unrecognized').
+    """
+    # R13 — dormant account
     if "inactive" in t or "dormant" in t or "90 day" in t:
         return _eval_dormant_account
 
-    # R3 — structuring / smurfing (7-day window, 20 deposits)
+    # R3 — structuring / smurfing
     if "structur" in t or "smurfing" in t or "20 deposits" in t or ("deposit" in t and "10000" in t):
         return _eval_structuring
 
     # R10 — near-threshold amounts (AML bands)
-    if "near-threshold" in t or "between" in t and "eur" in t or "9500" in t or "9999" in t:
+    if "near-threshold" in t or ("between" in t and "eur" in t) or "9500" in t or "9999" in t:
         return _eval_near_threshold_amount
 
     # R4 — night transactions
@@ -680,7 +726,7 @@ def _pick_evaluator(rule: FraudRuleModel):
         return _eval_repeated_alerts
 
     # R9 — velocity (card or wire)
-    if "velocity" in t or "per 1 hour" in t or "per hour" in t or "10 min" in t or "wire" in t and "min" in t:
+    if "velocity" in t or "per 1 hour" in t or "per hour" in t or "10 min" in t or ("wire" in t and "min" in t):
         return _eval_velocity
 
     # R2 — suspicious IBAN / OFAC
@@ -692,14 +738,14 @@ def _pick_evaluator(rule: FraudRuleModel):
         return _eval_cross_border
 
     # R12 — new beneficiary
-    if "new beneficiar" in t or "beneficiar" in t and ("new" in t or "3000" in t):
+    if "new beneficiar" in t or ("beneficiar" in t and ("new" in t or "3000" in t)):
         return _eval_new_beneficiary
 
     # R1 — large amount (must come after near-threshold check)
     if "amount" in t and (">" in t or ">" in t):
         return _eval_large_amount
 
-    # Fallback par domaine
+    # Domain-based coarse fallback
     domain_map = {
         "LIMIT":      _eval_large_amount,
         "AML":        _eval_structuring,

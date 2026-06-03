@@ -426,26 +426,21 @@ DEFAULT_RULES: list[dict] = [
 
 
 def seed_default_rules(db: Session) -> None:
-    """Insert default rules only if the table is empty."""
-    count = db.query(FraudRuleModel).count()
-    if count > 0:
-        return  # Already seeded — skip
+    """
+    No-op — fraud_rules are now seeded directly in postgres/init-db.sql
+    with fixed IDs (RL-HA-001 ... RL-DA-013) and EUR thresholds.
 
-    for rule_data in DEFAULT_RULES:
-        initials = "".join(w[0] for w in rule_data["name"].split() if w)[:3].upper()
-        rule_id  = f"RL-{initials}-{uuid.uuid4().hex[:6].upper()}"
-        rule = FraudRuleModel(
-            id             = rule_id,
-            name           = rule_data["name"],
-            domain         = rule_data["domain"],
-            trigger        = rule_data["trigger"],
-            trigger_detail = rule_data["triggerDetail"],
-            points         = rule_data["points"],
-            severity       = rule_data["severity"],
-            active         = rule_data["active"],
-            description    = rule_data["description"],
-            created_at     = datetime.now(timezone.utc),
-            updated_at     = datetime.now(timezone.utc),
-        )
-        db.add(rule)
-    db.commit()
+    This function is kept for backward compatibility (main.py calls it at
+    startup) but deliberately does nothing: init-db.sql is now the single
+    source of truth for the default ruleset.
+
+    This eliminates the dual-seed conflict that caused the 8 old TND rules
+    to survive every container restart.
+    """
+    import logging
+    log = logging.getLogger(__name__)
+    count = db.query(FraudRuleModel).count()
+    log.info(
+        f"[seed_default_rules] {count} rule(s) already in DB "
+        f"(seeded by init-db.sql) — nothing to do."
+    )

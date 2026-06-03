@@ -1,4 +1,4 @@
-    -- ══════════════════════════════════════════════════════════════════════════
+-- ══════════════════════════════════════════════════════════════════════════
     -- init-db.sql — PostgreSQL Database Initialization Script
     -- ══════════════════════════════════════════════════════════════════════════
     -- Purpose: Create separate databases with dedicated users for each service
@@ -256,6 +256,161 @@
 
     CREATE INDEX idx_fraud_rules_domain ON fraud_rules(domain);
     CREATE INDEX idx_fraud_rules_active ON fraud_rules(active);
+
+    -- ══════════════════════════════════════════════════════════════════════════
+    -- 🌱 SEED: fraud_rules — 13 règles EUR (normes 5AMLD / PSD2 / FATF 2023)
+    -- ══════════════════════════════════════════════════════════════════════════
+    -- Référence réglementaire :
+    --   R1  HIGH_AMOUNT           > 5 000 €   PSD2 SCA Art.18 (was 3 000 TND)
+    --   R2  SUSPICIOUS_IBAN       regex + pays OFAC (RU/IR/KP/SY/VE)
+    --   R3  STRUCTURING           > 20 dépôts < 10 000 € / 7 jours  5AMLD Art.11 (was 3 txns/24h)
+    --   R4  NIGHT_TRANSACTION     00:00–05:00  (inchangé)
+    --   R5  FOREIGN_IP            géofencing > 1 000 km  (was IP fixe 185.230.x.x)
+    --   R6  HIGH_RISK_MCC         MCC 5541/5999/5311 + > 1 500 €  (inchangé)
+    --   R7  BALANCE_DRAIN         > 80 % du solde  (inchangé)
+    --   R8  REPEATED_ALERTS       ≥ 2 alertes / 7 jours  FATF Rec.20 (was 3+)
+    --   R9  VELOCITY_HIGH         carte > 5/1h · virement > 10/10 min  5AMLD (NOUVEAU)
+    --   R10 NEAR_THRESHOLD        9 500–9 999 €  AML  (was montant rond > 500 €, NOUVEAU)
+    --   R11 CROSS_BORDER          pays différents / 48h  (NOUVEAU)
+    --   R12 NEW_BENEFICIARY_HIGH  nouveau bénéf. + transfert immédiat > 3 000 €  (NOUVEAU)
+    --   R13 DORMANT_ACCOUNT       inactif > 90 jours  (NOUVEAU)
+    -- ══════════════════════════════════════════════════════════════════════════
+
+    \echo '🌱 Seeding fraud_rules (13 rules, EUR thresholds)...'
+
+    INSERT INTO fraud_rules (id, name, domain, trigger, trigger_detail, points, severity, active, description, created_at, updated_at) VALUES
+
+    -- R1 — HIGH_AMOUNT : > 5 000 EUR (PSD2 high-value threshold)
+    ('RL-HA-001',
+     'High amount transaction',
+     'LIMIT',
+     'Amount > 5000 EUR',
+     'PSD2 high-value threshold — 3DS + geoloc required above 5 000 €',
+     30, 'HIGH', TRUE,
+     'Flags any single transaction exceeding 5 000 €. Aligned with PSD2 SCA Art.18 and card-network high-value rules (Visa/Mastercard: >5 000 € → mandatory 3DS + geolocation check). Previous threshold of 3 000 TND generated excessive false positives on routine business payments.',
+     NOW(), NOW()),
+
+    -- R2 — SUSPICIOUS_IBAN : regex + OFAC country prefixes
+    ('RL-SI-002',
+     'Suspicious IBAN check',
+     'GEOGRAPHIC',
+     'Client/counterparty IBAN in blacklist or OFAC country',
+     'OFAC sanctioned countries: RU, IR, KP, SY, VE — auto-BLOCK',
+     20, 'HIGH', TRUE,
+     'Checks client and counterparty IBANs against the known suspicious IBAN blacklist AND against OFAC-sanctioned country prefixes (RU=Russia, IR=Iran, KP=North Korea, SY=Syria, VE=Venezuela). Any match with an OFAC country triggers automatic BLOCK. Self-transfer detection also covered.',
+     NOW(), NOW()),
+
+    -- R3 — STRUCTURING : > 20 deposits < 10 000 EUR / 7 days (5AMLD Art.11)
+    ('RL-ST-003',
+     'Structuring / smurfing (AML)',
+     'AML',
+     'More than 20 deposits under 10000 EUR within 7 days',
+     '5AMLD Art.11: smurfing window = 7 days, reporting threshold = 10 000 €. Suspect amounts: 9 990, 9 950, 4 990 €.',
+     35, 'CRITICAL', TRUE,
+     'Classic AML structuring (smurfing): multiple deposits just below the 10 000 € mandatory reporting threshold (5AMLD Art.11), spread over a 7-day sliding window to avoid detection. TRACFIN declaration mandatory if triggered. Replaces the previous single-day 850–950 TND band which matched no legal standard.',
+     NOW(), NOW()),
+
+    -- R4 — NIGHT_TRANSACTION : 00:00–05:00 (confirmed, unchanged)
+    ('RL-NT-004',
+     'Night transfer alert',
+     'BEHAVIORAL',
+     'P2P / INTL transfer between 00:00–05:00',
+     'Unusual hour for high-value transfers — banking scoring matrix +20 pts',
+     10, 'MEDIUM', TRUE,
+     'Flags P2P and international wire transfers executed during the 00:00–05:00 window. Confirmed as a standard behavioural signal in bank scoring matrices (night-hour = +20 pts base). No threshold change required.',
+     NOW(), NOW()),
+
+    -- R5 — FOREIGN_IP / GEOFENCING : country-level (was IP prefix 185.230.x.x)
+    ('RL-FI-005',
+     'Foreign IP / geofencing alert',
+     'GEOGRAPHIC',
+     'IP country differs from client home country OR distance > 1000 km',
+     'Secondary check: amount > 3000 EUR or customer risk score >= 70. OFAC countries → BLOCK.',
+     20, 'HIGH', TRUE,
+     'Replaces the single hard-coded IP prefix 185.230.x.x with country-level geofencing: any transaction originating from an IP whose country differs from the client registered home country, or where estimated distance from the last known location exceeds 1 000 km, is flagged. Matches Visa/Mastercard geo-blocking standard. Secondary threshold raised to 3 000 EUR (was 2 000 TND).',
+     NOW(), NOW()),
+
+    -- R6 — HIGH_RISK_MCC : MCC 5541/5999/5311 + > 1 500 EUR (confirmed, TND→EUR label)
+    ('RL-MCC-006',
+     'High-risk merchant (MCC)',
+     'BEHAVIORAL',
+     'MCC 5541/5999/5311 and amount > 1500 EUR',
+     'No recent pattern for this MCC on account history',
+     10, 'MEDIUM', TRUE,
+     'Flags high-value purchases at merchant category codes statistically linked to fraud: 5541 (service stations/gas), 5999 (misc. retail), 5311 (department stores). Threshold of 1 500 EUR confirmed appropriate for the international context.',
+     NOW(), NOW()),
+
+    -- R7 — BALANCE_DRAIN : > 80% of balance (confirmed, unchanged)
+    ('RL-BD-007',
+     'Balance drain pattern',
+     'BEHAVIORAL',
+     'Amount > 80% of account current balance',
+     'Moving most of balance in one transaction',
+     10, 'HIGH', TRUE,
+     'Detects transactions that drain more than 80% of the account balance in a single operation. Standard behavioural signal across banking fraud systems. No threshold change required.',
+     NOW(), NOW()),
+
+    -- R8 — REPEATED_ALERTS : >= 2 alerts / 7 days (was 3+) — FATF Rec. 20
+    ('RL-RA-008',
+     'Repeated fraud alerts',
+     'BEHAVIORAL',
+     '2 or more ALERTED transactions in last 7 days',
+     'Same client IBAN — persistent risk profile confirmed from second alert',
+     25, 'HIGH', FALSE,
+     'Detects ongoing risk profiles from repeated alert status on the same IBAN. Threshold lowered from 3 to 2 alerts: a second flag within 7 days is sufficient to confirm a persistent pattern per FATF Recommendation 20 (ongoing monitoring). Score raised to 25. Disabled by default until alert_count_7d column is populated.',
+     NOW(), NOW()),
+
+    -- R9 — VELOCITY_HIGH : card > 5/1h OR wire > 10/10min (NEW — 5AMLD velocity)
+    ('RL-VH-009',
+     'High velocity transactions',
+     'VELOCITY',
+     'More than 5 card transactions per 1 hour OR more than 10 wire transfers per 10 minutes',
+     'Card >5/1h → Challenge SMS (5AMLD) | Wire >10/10min → auto-BLOCK',
+     20, 'HIGH', TRUE,
+     'Two velocity sub-rules in one: (1) Card: >5 transactions in 1 hour → Challenge SMS (5AMLD velocity standard). (2) Wire/SEPA: >10 transfers in 10 minutes → automatic BLOCK. Previous single threshold of >10/1h was double the card standard and missed fast-paced wire fraud.',
+     NOW(), NOW()),
+
+    -- R10 — NEAR_THRESHOLD : 9 500–9 999 EUR AML band (NEW — replaces round > 500 EUR)
+    ('RL-NTA-010',
+     'Suspicious near-threshold amount (AML)',
+     'AML',
+     'Amount between 9500 EUR and 9999 EUR',
+     'Classic structuring: just below 10 000 € TRACFIN reporting threshold. Also flags 4 500–4 999 € and 14 500–14 999 €.',
+     15, 'HIGH', TRUE,
+     'Detects amounts deliberately kept just below the mandatory cash reporting threshold (10 000 €) as defined by 5AMLD and FATF. Danger bands: 9 500–9 999 € (primary), 4 500–4 999 € and 14 500–14 999 € (secondary, for split-transaction structuring). Replaces the previous >500 € round amount rule which generated massive false positives (every salary, rent, or round-number business payment).',
+     NOW(), NOW()),
+
+    -- R11 — CROSS_BORDER : different countries / 48h (NEW — layering detection)
+    ('RL-CB-011',
+     'Cross-border transaction',
+     'GEOGRAPHIC',
+     'Transactions in different countries within 48 hours',
+     'Layering detection: A→B→C chain under 48h. OFAC countries → BLOCK.',
+     12, 'MEDIUM', TRUE,
+     'Flags accounts with transactions in different countries within a 48-hour window. Aligned with AML layering detection (A→B→C cascade < 48h) and OFAC geofencing. No threshold change required.',
+     NOW(), NOW()),
+
+    -- R12 — NEW_BENEFICIARY_HIGH : new benef + immediate transfer > 3 000 EUR (NEW)
+    ('RL-NB-012',
+     'New beneficiary high-value transfer',
+     'BEHAVIORAL',
+     'New beneficiary added AND immediate transfer > 3000 EUR in same session',
+     'Beneficiary velocity: add + transfer in same session is the critical signal, not amount alone',
+     20, 'HIGH', TRUE,
+     'Detects the critical fraud pattern: a new beneficiary is added and a high-value transfer to that beneficiary is executed in the same session. Threshold raised from 2 000 € to 3 000 € to reduce false positives on routine payroll or rent payments. The immediate transfer condition (same session) is mandatory — the velocity component is the true fraud signal.',
+     NOW(), NOW()),
+
+    -- R13 — DORMANT_ACCOUNT : inactive > 90 days (NEW — money-mule reactivation)
+    ('RL-DA-013',
+     'Dormant account reactivation',
+     'BEHAVIORAL',
+     'Account inactive for more than 90 days with sudden activity',
+     'Standard money-mule reactivation indicator',
+     18, 'HIGH', TRUE,
+     'Flags accounts that have been inactive for more than 90 days and suddenly show significant transaction activity. Standard money-mule reactivation indicator per FATF typologies. No threshold change required.',
+     NOW(), NOW());
+
+    \echo '✅ fraud_rules seeded: 13 rules (EUR thresholds, 5AMLD/PSD2/FATF 2023)'
 
     -- ── Fraud decision logs (written by fraud-service, read by text-to-sql) ──
     CREATE TABLE IF NOT EXISTS fraud_decision_logs (

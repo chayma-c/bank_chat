@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from fraud.database import get_db
 from fraud.schemas  import FraudRuleCreate, FraudRuleUpdate, FraudRulePatch, FraudRuleResponse
 from fraud import crud
+from fraud.llm_rule_classifier import invalidate_rule_cache
 
 router = APIRouter(prefix="/rules", tags=["Fraud Rules"])
 
@@ -42,6 +43,7 @@ def update_rule(rule_id: str, data: FraudRuleUpdate, db: Session = Depends(get_d
     rule = crud.update_rule(db, rule_id, data)
     if not rule:
         raise HTTPException(status_code=404, detail=f"Rule '{rule_id}' not found")
+    invalidate_rule_cache(rule_id)
     return rule.to_dict()
 
 
@@ -53,6 +55,7 @@ def patch_rule(rule_id: str, data: FraudRulePatch, db: Session = Depends(get_db)
     rule = crud.patch_rule(db, rule_id, data.active)
     if not rule:
         raise HTTPException(status_code=404, detail=f"Rule '{rule_id}' not found")
+    invalidate_rule_cache(rule_id)
     return rule.to_dict()
 
 
