@@ -287,9 +287,9 @@ def route_fraud_output(
             target_path=filepath,
         )
 
-        expires = int(time.time()) + 1800 # Valid for 30 minutes
-        signature = generate_report_signature(filename, expires)
-        download_url = f"{_public_url()}/reports/{filename}?expires={expires}&signature={signature}"
+        # No expiry: generate a signature tied to the filename only
+        signature = generate_report_signature(filename)
+        download_url = f"{_public_url()}/reports/{filename}?signature={signature}"
         
         result["local_path"]   = str(filepath)
         result["download_url"] = download_url
