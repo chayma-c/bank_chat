@@ -214,7 +214,6 @@ _bearer_optional = HTTPBearer(auto_error=False)
 @app.get("/reports/{filename}")
 async def download_report(
     filename: str,
-    expires: int | None = None,
     signature: str | None = None,
     creds = Depends(_bearer_optional)
 ):
@@ -234,18 +233,18 @@ async def download_report(
         except HTTPException:
             pass
             
-    # Mode 2: HMAC Signature fallback
+    # Mode 2: HMAC Signature fallback (signature now tied to filename only)
     if not is_authed:
-        if not expires or not signature:
+        if not signature:
             raise HTTPException(
-                status_code=401, 
+                status_code=401,
                 detail="Authentication required: Provide a Bearer token or a valid signed URL."
             )
-        
-        if not verify_report_signature(filename, expires, signature):
+
+        if not verify_report_signature(filename, signature):
             raise HTTPException(
-                status_code=403, 
-                detail="Access denied: Invalid or expired signature."
+                status_code=403,
+                detail="Access denied: Invalid signature."
             )
 
     if ".." in filename or "/" in filename or "\\" in filename:

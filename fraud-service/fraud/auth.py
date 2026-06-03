@@ -44,16 +44,21 @@ BANK_AGENT_ROLES = frozenset({"bank_agent", "admin"})
 def get_shared_secret() -> str:
     return os.getenv("DJANGO_SECRET_KEY", "fallback-secret-for-dev")
 
-def generate_report_signature(filename: str, expires: int) -> str:
-    """Generate an HMAC-SHA256 signature for a filename + expiration."""
-    msg = f"{filename}:{expires}".encode()
+def generate_report_signature(filename: str) -> str:
+    """Generate an HMAC-SHA256 signature for a filename.
+
+    Note: signatures are permanent for a file name (no expiry).
+    """
+    msg = f"{filename}".encode()
     return hmac.new(get_shared_secret().encode(), msg, hashlib.sha256).hexdigest()
 
-def verify_report_signature(filename: str, expires: int, signature: str) -> bool:
-    """Verify the signature and check if it has expired."""
-    if int(expires) < int(time.time()):
-        return False
-    expected = generate_report_signature(filename, expires)
+
+def verify_report_signature(filename: str, signature: str) -> bool:
+    """Verify the signature for a filename. Does not check expiration.
+
+    Returns True if the signature matches.
+    """
+    expected = generate_report_signature(filename)
     return hmac.compare_digest(expected, signature)
 
 
