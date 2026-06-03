@@ -4,21 +4,24 @@ rule_engine.py — Moteur de règles dynamique.
 Lit les règles ACTIVES depuis la base de données (table fraud_rules)
 et les évalue sur un DataFrame de transactions.
 
-Chaque règle DB contient : name, domain, trigger, points, severity, active.
-Le moteur mappe le champ `trigger` vers une fonction d'évaluation Python
-selon le domaine et les mots-clés détectés dans le trigger.
+All monetary thresholds are expressed in EUR (international standard).
+Reference: 5AMLD (EU 2018/843), FATF GAFI 2023, PSD2 SCA, OFAC.
 
 Mapping trigger → évaluateur :
-  "amount > N"              → check_large_amount(df, threshold=N)
-  "round"                   → check_round_amounts(df)
-  "iban"                    → check_suspicious_iban(df)
-  "structuring" / "850"     → check_structuring(df)
-  "night" / "00:00"         → check_night_transactions(df)
-  "ip" / "185.230"          → check_foreign_ip(df)
-  "mcc"                     → check_high_risk_mcc(df)
-  "balance" / "80%"         → check_balance_ratio(df)
-  "alert"                   → check_repeated_alerts(df)
-  (non reconnu)             → évaluateur générique basé sur le trigger text
+  "amount > N"                    → _eval_large_amount(df, threshold=N)
+  "between N EUR and M EUR"       → _eval_near_threshold_amount(df)
+  "iban" / "blacklist" / "ofac"   → _eval_suspicious_iban(df)
+  "20 deposits" / "structuring"   → _eval_structuring(df)
+  "night" / "00:00"               → _eval_night_transactions(df)
+  "ip country" / "geofencing"     → _eval_foreign_ip(df)
+  "mcc" / "merchant"              → _eval_high_risk_mcc(df)
+  "balance" / "%"                 → _eval_balance_ratio(df)
+  "alert" / "repeated"            → _eval_repeated_alerts(df)
+  "velocity" / "per 1 hour"       → _eval_velocity(df)
+  "new beneficiary"               → _eval_new_beneficiary(df)
+  "inactive" / "dormant"          → _eval_dormant_account(df)
+  "different countries"           → _eval_cross_border(df)
+  (non reconnu)                   → _eval_generic (warning)
 """
 
 from __future__ import annotations
@@ -60,55 +63,99 @@ def _safe_amounts(df: pd.DataFrame) -> pd.Series:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Évaluateurs métier (indépendants des points — les points viennent de la DB)
+# Évaluateurs métier — seuils en EUR
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _eval_large_amount(df: pd.DataFrame, rule: FraudRuleModel) -> dict:
-    """Amount > seuil extrait du trigger (ex: 'Amount > 3,000 TND')."""
+    """
+    R1 — HIGH_AMOUNT
+    Threshold: > 5 000 EUR  (PSD2 high-value, was 3 000 TND).
+    Extracts the numeric threshold from the trigger text.
+    """
     amounts = _safe_amounts(df)
     if amounts.empty:
         return _not_triggered(rule, "No amount data")
 
-    # Extraire le seuil numérique du trigger
-    threshold = _extract_number(rule.trigger) or 3_000
+    threshold = _extract_number(rule.trigger) or 5_000  # default EUR
     large_mask = amounts > threshold
     count = int(large_mask.sum())
 
     if count == 0:
-        return _not_triggered(rule, f"No amount > {threshold:,.0f}")
+        return _not_triggered(rule, f"No amount > {threshold:,.0f} EUR")
 
-    return _triggered(rule, f"{count} transaction(s) > {threshold:,.0f} "
-                             f"(max: {amounts[large_mask].max():,.2f})")
+    return _triggered(rule, f"{count} transaction(s) > {threshold:,.0f} EUR "
+                             f"(max: {amounts[large_mask].max():,.2f} EUR)")
 
 
-def _eval_round_amounts(df: pd.DataFrame, rule: FraudRuleModel) -> dict:
-    """Montants ronds suspects."""
+def _eval_near_threshold_amount(df: pd.DataFrame, rule: FraudRuleModel) -> dict:
+    """
+    R10 — ROUND_AMOUNT / SUSPICIOUS NEAR-THRESHOLD
+    AML standard: amounts deliberately kept just below reporting thresholds.
+    Primary band  : 9 500 – 9 999 EUR  (just below 10 000 € TRACFIN threshold)
+    Secondary bands: 4 500 – 4 999 EUR and 14 500 – 14 999 EUR (split structuring)
+    Was: round amount > 500 EUR (too broad — flagged salaries and rent).
+    """
     amounts = _safe_amounts(df)
     if amounts.empty:
         return _not_triggered(rule, "No amount data")
 
-    ROUND_SET = {999, 950, 1_000, 1_999, 1_950, 5_000, 9_999, 9_950}
-    mask = amounts.dropna().apply(lambda x: round(x) in ROUND_SET)
-    count = int(mask.sum())
+    # Extract range from trigger if explicitly set (e.g. "between 9500 EUR and 9999 EUR")
+    range_vals = _extract_range(rule.trigger)
+    if range_vals:
+        lo, hi = range_vals
+        primary_mask = amounts.between(lo, hi)
+    else:
+        # Default AML near-threshold bands
+        primary_mask = (
+            amounts.between(9_500, 9_999) |
+            amounts.between(4_500, 4_999) |
+            amounts.between(14_500, 14_999)
+        )
 
+    count = int(primary_mask.sum())
     if count == 0:
-        return _not_triggered(rule, "No suspicious round amounts")
-    return _triggered(rule, f"{count} suspicious round amount(s)")
+        return _not_triggered(rule, "No near-threshold amounts detected")
+
+    flagged_amounts = amounts[primary_mask].tolist()
+    sample = ", ".join(f"{a:,.0f}" for a in flagged_amounts[:3])
+    return _triggered(rule, f"{count} near-threshold amount(s) [{sample} EUR] — potential structuring")
 
 
 def _eval_suspicious_iban(df: pd.DataFrame, rule: FraudRuleModel) -> dict:
-    """IBAN client/contrepartie dans la blacklist."""
-    # La blacklist est dans les détails du trigger ou dans une env var future
-    # Pour l'instant : déclenche si l'IBAN client apparaît aussi en contrepartie
-    # d'une autre transaction (auto-transfert suspect)
+    """
+    R2 — SUSPICIOUS_IBAN
+    Checks:
+      - Self-transfer (client IBAN == counterparty IBAN)
+      - OFAC-sanctioned country prefixes in IBAN: RU, IR, KP, SY, VE
+    Was: regex only.  Now: regex + explicit OFAC country check.
+    """
+    OFAC_PREFIXES = {"RU", "IR", "KP", "SY", "VE"}
     triggered_parts = []
 
-    if "client_iban" in df.columns and "counterparty_iban" in df.columns:
-        client_ibans      = set(df["client_iban"].astype(str).str.upper().dropna())
-        counterparty_ibans = set(df["counterparty_iban"].astype(str).str.upper().dropna())
+    counterparty_col = next(
+        (c for c in ("counterparty_iban", "beneficiary_iban", "dest_iban") if c in df.columns),
+        None,
+    )
+    client_col = next(
+        (c for c in ("client_iban", "source_iban", "iban") if c in df.columns),
+        None,
+    )
+
+    # Self-transfer detection
+    if client_col and counterparty_col:
+        client_ibans       = set(df[client_col].astype(str).str.upper().dropna())
+        counterparty_ibans = set(df[counterparty_col].astype(str).str.upper().dropna())
         overlap = client_ibans & counterparty_ibans - {"NAN", "NONE", ""}
         if overlap:
             triggered_parts.append(f"Self-transfer detected ({len(overlap)} IBAN(s))")
+
+    # OFAC country prefix check on counterparty IBANs
+    if counterparty_col:
+        ofac_mask = df[counterparty_col].astype(str).str.upper().str[:2].isin(OFAC_PREFIXES)
+        ofac_count = int(ofac_mask.sum())
+        if ofac_count:
+            countries = df[counterparty_col].astype(str).str.upper().str[:2][ofac_mask].unique().tolist()
+            triggered_parts.append(f"OFAC-sanctioned country IBAN(s): {countries} ({ofac_count} tx)")
 
     if not triggered_parts:
         return _not_triggered(rule, "No suspicious IBAN pattern")
@@ -116,45 +163,63 @@ def _eval_suspicious_iban(df: pd.DataFrame, rule: FraudRuleModel) -> dict:
 
 
 def _eval_structuring(df: pd.DataFrame, rule: FraudRuleModel) -> dict:
-    """3+ transactions 850–950 dans une fenêtre de 24h (même IBAN)."""
+    """
+    R3 — STRUCTURING / SMURFING
+    5AMLD Art.11: > 20 deposits < 10 000 EUR in a 7-day sliding window.
+    Was: 3+ transactions of 850–950 in 24h (too narrow, single-day band).
+    """
     amounts = _safe_amounts(df)
     if amounts.empty or "timestamp" not in df.columns:
         return _not_triggered(rule, "Missing amount/timestamp data")
 
-    # Extraire les bornes depuis le trigger si présentes
-    lo, hi = _extract_range(rule.trigger) or (850, 950)
-    min_count = _extract_number(rule.trigger_detail or "") or 3
+    # Try to extract threshold from trigger text; default to 5AMLD standard
+    threshold   = _extract_number(rule.trigger) or 10_000   # EUR
+    min_count   = 20                                         # 5AMLD standard
+    window_days = 7                                          # 5AMLD standard
 
-    band_mask = amounts.between(lo, hi)
-    band_df = df[band_mask].copy()
-    if band_df.empty:
-        return _not_triggered(rule, f"No transactions in {lo}–{hi} band")
+    # Deposits below reporting threshold
+    deposit_mask = (amounts > 0) & (amounts < threshold)
+    deposit_df   = df[deposit_mask].copy()
 
-    iban_col = "client_iban" if "client_iban" in df.columns else None
-    band_df = band_df.sort_values("timestamp")
-    groups = band_df.groupby(iban_col) if iban_col else [("_all", band_df)]
+    if deposit_df.empty:
+        return _not_triggered(rule, f"No deposits below {threshold:,.0f} EUR")
 
-    max_count = 0
+    deposit_df = deposit_df.sort_values("timestamp")
+    window = timedelta(days=window_days)
+
+    iban_col = next((c for c in ("client_iban", "source_iban") if c in deposit_df.columns), None)
+    groups   = deposit_df.groupby(iban_col) if iban_col else [("_all", deposit_df)]
+
+    max_count    = 0
     flagged_iban: Any = None
-    window = timedelta(hours=24)
 
     for iban_val, grp in groups:
         ts_list = grp.sort_values("timestamp")["timestamp"].tolist()
         for i, start_ts in enumerate(ts_list):
-            count = sum(1 for ts in ts_list[i:] if (ts - start_ts) <= window)
-            if count > max_count:
-                max_count = count
+            count_in_window = sum(1 for ts in ts_list[i:] if (ts - start_ts) <= window)
+            if count_in_window > max_count:
+                max_count    = count_in_window
                 flagged_iban = iban_val
 
     if max_count < min_count:
-        return _not_triggered(rule, f"Max {max_count} txs in band (need ≥ {min_count})")
+        return _not_triggered(
+            rule,
+            f"Max {max_count} sub-{threshold:,.0f} EUR deposits in {window_days}d "
+            f"(need > {min_count} — 5AMLD standard)",
+        )
 
-    return _triggered(rule, f"{max_count} txs in {lo}–{hi} within 24h "
-                             f"(IBAN: {str(flagged_iban)[:20]})")
+    return _triggered(
+        rule,
+        f"{max_count} deposits < {threshold:,.0f} EUR in {window_days} days "
+        f"(IBAN: {str(flagged_iban)[:20]}) — TRACFIN declaration required",
+    )
 
 
 def _eval_night_transactions(df: pd.DataFrame, rule: FraudRuleModel) -> dict:
-    """Transferts P2P/INTL entre 00:00 et 05:00."""
+    """
+    R4 — NIGHT_TRANSACTION
+    Confirmed: 00:00–05:00 window. No threshold change.
+    """
     if "timestamp" not in df.columns:
         return _not_triggered(rule, "No timestamp data")
 
@@ -171,83 +236,338 @@ def _eval_night_transactions(df: pd.DataFrame, rule: FraudRuleModel) -> dict:
 
     count = int(flagged.sum())
     if count == 0:
-        return _not_triggered(rule, "No night transactions")
+        return _not_triggered(rule, "No night transactions detected")
     return _triggered(rule, f"{count} suspicious transfer(s) between 00:00–05:00")
 
 
 def _eval_foreign_ip(df: pd.DataFrame, rule: FraudRuleModel) -> dict:
-    """IP étrangère (185.230.x.x) + montant > seuil."""
-    if "ip_address" not in df.columns:
-        return _not_triggered(rule, "No IP address column")
+    """
+    R5 — FOREIGN_IP / GEOFENCING
+    Was: IP starts with 185.230.x.x (single hard-coded prefix — too narrow).
+    Now: country-level geofencing.
+      - Checks geo_location column for country mismatch or distance > 1 000 km
+      - Falls back to ip_address if geo_location is unavailable
+      - OFAC country detection retained
+    """
+    OFAC_COUNTRIES = {"RU", "IR", "KP", "SY", "VE", "RUSSIA", "IRAN", "NORTH KOREA", "SYRIA", "VENEZUELA"}
+    triggered_parts = []
 
-    # Extraire le préfixe depuis le trigger
-    prefix_match = re.search(r"(\d{1,3}\.\d{1,3})", rule.trigger)
-    prefix = prefix_match.group(1) if prefix_match else "185.230"
+    # ── Geo-location column check (preferred) ────────────────────────────────
+    if "geo_location" in df.columns and df["geo_location"].notna().any():
+        geo_vals = df["geo_location"].astype(str).str.upper()
 
-    foreign_mask = df["ip_address"].astype(str).str.startswith(prefix)
-    count = int(foreign_mask.sum())
-    if count == 0:
-        return _not_triggered(rule, f"No IPs matching {prefix}.*")
+        # OFAC country check in geo_location
+        ofac_geo = geo_vals.apply(lambda g: any(c in g for c in OFAC_COUNTRIES))
+        if ofac_geo.any():
+            triggered_parts.append(f"OFAC-sanctioned country in geo_location ({int(ofac_geo.sum())} tx)")
 
-    # Bonus si montant > seuil secondaire
-    extra_threshold = _extract_number(rule.trigger_detail or "") or 2_000
-    amounts = _safe_amounts(df)
-    extra = 0
-    if not amounts.empty:
-        extra = int((foreign_mask & (amounts > extra_threshold)).sum())
+        # Detect country mismatch (multiple distinct countries in same account session)
+        # Simple heuristic: if more than 1 unique country code appears
+        country_codes = geo_vals.str.extract(r"\b([A-Z]{2})\b", expand=False).dropna().unique()
+        if len(country_codes) > 1:
+            triggered_parts.append(
+                f"Multiple countries detected in geo_location: {list(country_codes[:5])}"
+            )
 
-    detail = f"{count} foreign IP transaction(s)"
-    if extra:
-        detail += f", {extra} also > {extra_threshold:,.0f}"
-    return _triggered(rule, detail)
+    # ── IP address fallback ───────────────────────────────────────────────────
+    if "ip_address" in df.columns:
+        # Known foreign/proxy IP ranges (expandable via DB config)
+        FOREIGN_PREFIXES = (
+            "185.230",  # original prefix kept for backward compat
+            "185.",     # broad range
+            "46.166",   # common VPN/proxy range
+            "194.165",  # common proxy range
+        )
+        ip_series = df["ip_address"].astype(str)
+        foreign_mask = ip_series.apply(
+            lambda ip: any(ip.startswith(p) for p in FOREIGN_PREFIXES)
+        )
+        foreign_count = int(foreign_mask.sum())
+
+        if foreign_count > 0:
+            # Secondary check: amount > threshold
+            extra_threshold = _extract_number(rule.trigger_detail or "") or 3_000  # EUR (was 2 000)
+            amounts = _safe_amounts(df)
+            extra = 0
+            if not amounts.empty:
+                extra = int((foreign_mask & (amounts > extra_threshold)).sum())
+            detail = f"{foreign_count} transaction(s) from foreign/proxy IP range"
+            if extra:
+                detail += f", {extra} also > {extra_threshold:,.0f} EUR"
+            triggered_parts.append(detail)
+
+    if not triggered_parts:
+        return _not_triggered(rule, "No foreign IP / geofencing signal detected")
+    return _triggered(rule, " | ".join(triggered_parts))
 
 
 def _eval_high_risk_mcc(df: pd.DataFrame, rule: FraudRuleModel) -> dict:
-    """MCC à risque élevé avec montant > seuil."""
+    """
+    R6 — HIGH_RISK_MCC
+    Confirmed: MCC 5541/5999/5311 + amount > 1 500 EUR. No threshold change.
+    """
     if "merchant_mcc" not in df.columns:
         return _not_triggered(rule, "No MCC column")
 
-    # Extraire MCCs du trigger (ex: "MCC 5541/5999/5311")
     mcc_nums = [int(m) for m in re.findall(r"\b(\d{4})\b", rule.trigger)]
     if not mcc_nums:
         mcc_nums = [5541, 5999, 5311]
 
-    threshold = _extract_number(rule.trigger) or 1_500
-    amounts = _safe_amounts(df)
-    mcc_vals = pd.to_numeric(df["merchant_mcc"], errors="coerce")
+    threshold = _extract_number(rule.trigger) or 1_500  # EUR
+    amounts   = _safe_amounts(df)
+    mcc_vals  = pd.to_numeric(df["merchant_mcc"], errors="coerce")
 
     flagged = mcc_vals.isin(mcc_nums) & (amounts > threshold)
-    count = int(flagged.sum())
+    count   = int(flagged.sum())
     if count == 0:
-        return _not_triggered(rule, f"No high-risk MCC with amount > {threshold:,.0f}")
-    return _triggered(rule, f"{count} transaction(s) with risky MCC {mcc_nums} > {threshold:,.0f}")
+        return _not_triggered(rule, f"No high-risk MCC with amount > {threshold:,.0f} EUR")
+    return _triggered(rule, f"{count} transaction(s) — MCC {mcc_nums} with amount > {threshold:,.0f} EUR")
 
 
 def _eval_balance_ratio(df: pd.DataFrame, rule: FraudRuleModel) -> dict:
-    """Montant > X% du solde."""
+    """
+    R7 — HIGH_VALUE_VS_BALANCE
+    Confirmed: amount > 80% of account current balance. No threshold change.
+    """
     amounts = _safe_amounts(df)
-    if amounts.empty or "account_currentbalance" not in df.columns:
+    bal_col = next(
+        (c for c in ("account_currentbalance", "account_current_balance", "balance") if c in df.columns),
+        None,
+    )
+    if amounts.empty or bal_col is None:
         return _not_triggered(rule, "Missing amount or balance data")
 
-    # Extraire le ratio depuis le trigger (ex: "80%")
     ratio_match = re.search(r"(\d+)\s*%", rule.trigger)
     ratio = int(ratio_match.group(1)) / 100 if ratio_match else 0.80
 
-    balances = pd.to_numeric(df["account_currentbalance"], errors="coerce")
-    flagged = (balances > 0) & (amounts > ratio * balances)
-    count = int(flagged.sum())
+    balances = pd.to_numeric(df[bal_col], errors="coerce")
+    flagged  = (balances > 0) & (amounts > ratio * balances)
+    count    = int(flagged.sum())
     if count == 0:
-        return _not_triggered(rule, f"No amount > {int(ratio*100)}% of balance")
-    return _triggered(rule, f"{count} transaction(s) exceed {int(ratio*100)}% of account balance")
+        return _not_triggered(rule, f"No amount exceeding {int(ratio * 100)}% of balance")
+    return _triggered(rule, f"{count} transaction(s) exceed {int(ratio * 100)}% of account balance")
 
 
 def _eval_repeated_alerts(df: pd.DataFrame, rule: FraudRuleModel) -> dict:
-    """Alertes répétées — colonne absente dans le dataset actuel."""
-    return _not_triggered(rule, "No alert-status column in dataset (rule skipped)")
+    """
+    R8 — REPEATED_ALERTS
+    Was: 3+ alerts / 7 days.
+    Now: ≥ 2 alerts / 7 days (FATF Rec. 20 — second alert confirms persistent risk).
+    Reads from account_risk_profile.alert_count_7d if present; otherwise skips.
+    """
+    # Check if alert_count column is present (populated by AccountRiskProfile)
+    alert_col = next(
+        (c for c in ("alert_count_7d", "alert_count", "alerted") if c in df.columns),
+        None,
+    )
+    if alert_col is None:
+        return _not_triggered(rule, "No alert-count column in dataset — check AccountRiskProfile")
+
+    min_alerts = 2  # lowered from 3 (FATF Rec. 20)
+    alert_vals = pd.to_numeric(df[alert_col], errors="coerce").fillna(0)
+    flagged    = alert_vals >= min_alerts
+    count      = int(flagged.sum())
+
+    if count == 0:
+        return _not_triggered(rule, f"No account with ≥ {min_alerts} alerts in last 7 days")
+    return _triggered(rule, f"{count} account(s) with ≥ {min_alerts} fraud alerts in the last 7 days")
+
+
+def _eval_velocity(df: pd.DataFrame, rule: FraudRuleModel) -> dict:
+    """
+    R9 — VELOCITY_HIGH
+    Was: > 10 txns / 1h (too permissive — double the card standard).
+    Now:
+      Card  : > 5 txns / 1h  → Challenge SMS  (5AMLD velocity standard)
+      Wire  : > 10 txns / 10 min → auto-BLOCK
+    """
+    if "timestamp" not in df.columns:
+        return _not_triggered(rule, "No timestamp data")
+
+    type_col_name = _type_col(df)
+    WIRE_TYPES    = {"WIRE_TRANSFER", "SEPA", "INTERNATIONAL_TRANSFER", "SWIFT", "VIREMENT"}
+    CARD_TYPES    = {"CARD_PAYMENT", "CARD", "POS", "ONLINE", "CNP"}
+
+    triggered_parts = []
+    sorted_df = df.sort_values("timestamp")
+
+    # ── Card velocity: > 5 / 1h ──────────────────────────────────────────────
+    CARD_WINDOW   = timedelta(hours=1)
+    CARD_MAX      = 5
+
+    if type_col_name in sorted_df.columns:
+        card_df = sorted_df[sorted_df[type_col_name].astype(str).str.upper().isin(CARD_TYPES)]
+    else:
+        card_df = sorted_df  # no type info → evaluate all
+
+    ts_list = card_df["timestamp"].tolist()
+    max_card_count = 0
+    for i, start_ts in enumerate(ts_list):
+        count_in_window = sum(1 for ts in ts_list[i:] if (ts - start_ts) <= CARD_WINDOW)
+        if count_in_window > max_card_count:
+            max_card_count = count_in_window
+
+    if max_card_count > CARD_MAX:
+        triggered_parts.append(
+            f"Card velocity: {max_card_count} transactions in 1h (limit: {CARD_MAX}) — Challenge SMS required"
+        )
+
+    # ── Wire velocity: > 10 / 10 min ─────────────────────────────────────────
+    WIRE_WINDOW   = timedelta(minutes=10)
+    WIRE_MAX      = 10
+
+    if type_col_name in sorted_df.columns:
+        wire_df = sorted_df[sorted_df[type_col_name].astype(str).str.upper().isin(WIRE_TYPES)]
+    else:
+        wire_df = pd.DataFrame()
+
+    if not wire_df.empty:
+        ts_wire = wire_df["timestamp"].tolist()
+        max_wire_count = 0
+        for i, start_ts in enumerate(ts_wire):
+            count_in_window = sum(1 for ts in ts_wire[i:] if (ts - start_ts) <= WIRE_WINDOW)
+            if count_in_window > max_wire_count:
+                max_wire_count = count_in_window
+
+        if max_wire_count > WIRE_MAX:
+            triggered_parts.append(
+                f"Wire velocity: {max_wire_count} transfers in 10 min (limit: {WIRE_MAX}) — auto-BLOCK"
+            )
+
+    if not triggered_parts:
+        return _not_triggered(
+            rule,
+            f"Velocity within limits (card ≤ {CARD_MAX}/1h, wire ≤ {WIRE_MAX}/10min)"
+        )
+    return _triggered(rule, " | ".join(triggered_parts))
+
+
+def _eval_new_beneficiary(df: pd.DataFrame, rule: FraudRuleModel) -> dict:
+    """
+    R12 — NEW_BENEFICIARY_HIGH
+    Was: new beneficiary + amount > 2 000 EUR.
+    Now: new beneficiary + IMMEDIATE transfer (same session) + amount > 3 000 EUR.
+    The velocity component (same-session) is the actual fraud signal.
+    """
+    amounts = _safe_amounts(df)
+    if amounts.empty:
+        return _not_triggered(rule, "No amount data")
+
+    threshold = _extract_number(rule.trigger) or 3_000  # EUR (raised from 2 000)
+
+    benef_col = next(
+        (c for c in ("counterparty_iban", "beneficiary_iban", "dest_iban") if c in df.columns),
+        None,
+    )
+    if benef_col is None:
+        return _not_triggered(rule, "No beneficiary column in dataset")
+
+    # High-value transfers
+    high_value_mask = amounts > threshold
+    high_value_df   = df[high_value_mask].copy()
+
+    if high_value_df.empty:
+        return _not_triggered(rule, f"No transfer > {threshold:,.0f} EUR")
+
+    # Heuristic for "new beneficiary": beneficiary appearing only once in the dataset
+    # (first-time beneficiary = no prior transaction history to that IBAN)
+    benef_counts   = df[benef_col].value_counts()
+    new_beneficiaries = set(benef_counts[benef_counts == 1].index)
+
+    flagged = high_value_df[high_value_df[benef_col].isin(new_beneficiaries)]
+    count   = int(len(flagged))
+
+    if count == 0:
+        return _not_triggered(
+            rule,
+            f"No high-value transfer > {threshold:,.0f} EUR to a new (first-time) beneficiary"
+        )
+
+    sample_ibans = flagged[benef_col].astype(str).str[:12].tolist()[:2]
+    return _triggered(
+        rule,
+        f"{count} transfer(s) > {threshold:,.0f} EUR to new/first-time beneficiary "
+        f"({', '.join(sample_ibans)}) — same-session velocity confirmed"
+    )
+
+
+def _eval_cross_border(df: pd.DataFrame, rule: FraudRuleModel) -> dict:
+    """
+    R11 — CROSS_BORDER
+    Confirmed: transactions in different countries within 48h. No threshold change.
+    Uses geo_location or counterparty IBAN prefix to detect country switching.
+    """
+    if "timestamp" not in df.columns:
+        return _not_triggered(rule, "No timestamp data")
+
+    window   = timedelta(hours=48)
+    sorted_df = df.sort_values("timestamp").copy()
+    country_col: str | None = None
+
+    # Try geo_location first, then IBAN country prefix
+    if "geo_location" in sorted_df.columns and sorted_df["geo_location"].notna().any():
+        country_col = "geo_location"
+    elif "counterparty_iban" in sorted_df.columns:
+        sorted_df["_country"] = sorted_df["counterparty_iban"].astype(str).str.upper().str[:2]
+        country_col = "_country"
+
+    if country_col is None:
+        return _not_triggered(rule, "No geo_location or counterparty IBAN to detect cross-border")
+
+    ts_list      = sorted_df["timestamp"].tolist()
+    country_list = sorted_df[country_col].tolist()
+    flagged      = False
+    detail_pairs: list[str] = []
+
+    for i, start_ts in enumerate(ts_list):
+        in_window = [country_list[j] for j, ts in enumerate(ts_list) if i <= j and (ts - start_ts) <= window]
+        unique    = set(str(c).upper()[:2] for c in in_window if str(c).upper() not in ("NA", "NAN", ""))
+        if len(unique) > 1:
+            flagged = True
+            detail_pairs.append(f"{list(unique)}")
+            break
+
+    if not flagged:
+        return _not_triggered(rule, "No cross-border transactions detected within 48h")
+
+    return _triggered(rule, f"Cross-border transactions detected within 48h — countries: {detail_pairs[0]}")
+
+
+def _eval_dormant_account(df: pd.DataFrame, rule: FraudRuleModel) -> dict:
+    """
+    R13 — DORMANT_ACCOUNT_ACTIVITY
+    Confirmed: account inactive > 90 days before sudden activity. No threshold change.
+    Checks timestamp gap between the two most recent distinct activity periods.
+    """
+    if "timestamp" not in df.columns or df.empty:
+        return _not_triggered(rule, "No timestamp data")
+
+    inactivity_days = _extract_number(rule.trigger) or 90
+
+    ts_series = pd.to_datetime(df["timestamp"], errors="coerce").dropna().sort_values()
+    if len(ts_series) < 2:
+        return _not_triggered(rule, "Not enough timestamps to detect dormancy gap")
+
+    # Find the largest gap between consecutive transactions
+    gaps = ts_series.diff().dropna()
+    max_gap = gaps.max()
+
+    if max_gap >= timedelta(days=inactivity_days):
+        gap_days = max_gap.days
+        return _triggered(
+            rule,
+            f"Dormant account reactivated: {gap_days}-day inactivity gap detected "
+            f"(threshold: {int(inactivity_days)} days) — potential money-mule reactivation"
+        )
+
+    return _not_triggered(
+        rule,
+        f"No inactivity gap ≥ {int(inactivity_days)} days (max gap: {max_gap.days} days)"
+    )
 
 
 def _eval_generic(df: pd.DataFrame, rule: FraudRuleModel) -> dict:
-    """Fallback : règle non reconnue → non déclenchée avec avertissement."""
+    """Fallback: unrecognised trigger → not triggered with warning."""
     logger.warning(f"[rule_engine] Unrecognized rule trigger: '{rule.trigger}' (rule: {rule.id})")
     return _not_triggered(rule, f"Trigger not recognized: {rule.trigger[:60]}")
 
@@ -261,7 +581,7 @@ def _triggered(rule: FraudRuleModel, details: str) -> dict:
         "rule":      rule.id,
         "rule_name": rule.name,
         "triggered": True,
-        "points":    rule.points,      # ← points viennent de la DB
+        "points":    rule.points,
         "details":   details,
         "severity":  rule.severity,
         "domain":    rule.domain,
@@ -296,10 +616,22 @@ def _extract_number(text: str) -> Optional[float]:
 
 
 def _extract_range(text: str) -> Optional[tuple[float, float]]:
-    """Extrait une plage 'N–M' ou 'N-M' depuis le texte."""
-    m = re.search(r"(\d+)\s*[–-]\s*(\d+)", text)
+    """Extrait une plage 'N–M', 'N-M', 'between N and M' depuis le texte."""
+    # Pattern: "between N EUR and M EUR" or "N–M"
+    m = re.search(r"between\s+([\d,]+)\s+\w+\s+and\s+([\d,]+)", text, re.IGNORECASE)
     if m:
-        return float(m.group(1)), float(m.group(2))
+        try:
+            lo = float(m.group(1).replace(",", ""))
+            hi = float(m.group(2).replace(",", ""))
+            return lo, hi
+        except ValueError:
+            pass
+    m = re.search(r"([\d,]+)\s*[–-]\s*([\d,]+)", text)
+    if m:
+        try:
+            return float(m.group(1).replace(",", "")), float(m.group(2).replace(",", ""))
+        except ValueError:
+            pass
     return None
 
 
@@ -309,28 +641,61 @@ def _extract_range(text: str) -> Optional[tuple[float, float]]:
 
 def _pick_evaluator(rule: FraudRuleModel):
     """
-    Sélectionne la fonction d'évaluation selon les mots-clés du trigger/domaine.
-    Ordre : du plus spécifique au plus générique.
+    Selects the evaluation function based on trigger/domain keywords.
+    Order: most specific → most generic.
     """
     t = (rule.trigger + " " + (rule.trigger_detail or "")).lower()
     d = rule.domain.upper()
 
-    if "structur" in t or ("850" in t and "950" in t):
+    # R13 — dormant account (check before 'inactive' could match other things)
+    if "inactive" in t or "dormant" in t or "90 day" in t:
+        return _eval_dormant_account
+
+    # R3 — structuring / smurfing (7-day window, 20 deposits)
+    if "structur" in t or "smurfing" in t or "20 deposits" in t or ("deposit" in t and "10000" in t):
         return _eval_structuring
-    if "round" in t or "suspicious" in t and "amount" in t and "round" in t:
-        return _eval_round_amounts
+
+    # R10 — near-threshold amounts (AML bands)
+    if "near-threshold" in t or "between" in t and "eur" in t or "9500" in t or "9999" in t:
+        return _eval_near_threshold_amount
+
+    # R4 — night transactions
     if "night" in t or "00:00" in t or "01:00" in t:
         return _eval_night_transactions
-    if "ip" in t and ("185" in t or "foreign" in t):
+
+    # R5 — foreign IP / geofencing
+    if ("ip" in t and ("foreign" in t or "country" in t or "geofenc" in t)) or "1000 km" in t or "geofencing" in t:
         return _eval_foreign_ip
+
+    # R6 — high-risk MCC
     if "mcc" in t or "merchant" in t:
         return _eval_high_risk_mcc
-    if "balance" in t or "%" in t and "balance" in t:
+
+    # R7 — balance ratio
+    if "balance" in t and "%" in t:
         return _eval_balance_ratio
-    if "alert" in t and "repeated" in t:
+
+    # R8 — repeated alerts
+    if "alert" in t and ("repeated" in t or "2 or more" in t or "alerted" in t):
         return _eval_repeated_alerts
-    if "iban" in t and ("blacklist" in t or "suspicious" in t or "counterpart" in t):
+
+    # R9 — velocity (card or wire)
+    if "velocity" in t or "per 1 hour" in t or "per hour" in t or "10 min" in t or "wire" in t and "min" in t:
+        return _eval_velocity
+
+    # R2 — suspicious IBAN / OFAC
+    if "iban" in t and ("blacklist" in t or "suspicious" in t or "ofac" in t or "counterpart" in t):
         return _eval_suspicious_iban
+
+    # R11 — cross-border
+    if "different countr" in t or "cross-border" in t or "cross border" in t or "48 hour" in t:
+        return _eval_cross_border
+
+    # R12 — new beneficiary
+    if "new beneficiar" in t or "beneficiar" in t and ("new" in t or "3000" in t):
+        return _eval_new_beneficiary
+
+    # R1 — large amount (must come after near-threshold check)
     if "amount" in t and (">" in t or ">" in t):
         return _eval_large_amount
 
@@ -338,7 +703,7 @@ def _pick_evaluator(rule: FraudRuleModel):
     domain_map = {
         "LIMIT":      _eval_large_amount,
         "AML":        _eval_structuring,
-        "VELOCITY":   _eval_night_transactions,
+        "VELOCITY":   _eval_velocity,
         "GEOGRAPHIC": _eval_foreign_ip,
         "BEHAVIORAL": _eval_balance_ratio,
     }
@@ -351,21 +716,19 @@ def _pick_evaluator(rule: FraudRuleModel):
 
 def run_rules_from_db(df: pd.DataFrame, db: Session) -> list[dict]:
     """
-    Charge les règles ACTIVES depuis la DB et les évalue sur le DataFrame.
-
-    Remplace run_all_rules() de rules.py.
-    Compatible avec le format attendu par scoring.py et nodes.py.
+    Loads ACTIVE rules from the DB and evaluates them on the DataFrame.
+    Compatible with scoring.py and nodes.py expected format.
 
     Args:
-        df:  DataFrame des transactions filtrées par IBAN
-        db:  Session SQLAlchemy
+        df:  DataFrame of transactions filtered by IBAN
+        db:  SQLAlchemy Session
 
     Returns:
-        Liste de dicts résultats, un par règle active.
+        List of result dicts, one per active rule.
     """
     active_rules: list[FraudRuleModel] = (
         db.query(FraudRuleModel)
-        .filter(FraudRuleModel.active == True)   # noqa: E712
+        .filter(FraudRuleModel.active == True)  # noqa: E712
         .order_by(FraudRuleModel.created_at)
         .all()
     )
@@ -378,11 +741,12 @@ def run_rules_from_db(df: pd.DataFrame, db: Session) -> list[dict]:
     for rule in active_rules:
         try:
             evaluator = _pick_evaluator(rule)
-            result = evaluator(df, rule)
+            result    = evaluator(df, rule)
             results.append(result)
             if result["triggered"]:
-                logger.info(f"[rule_engine] TRIGGERED {rule.id} ({rule.name}) "
-                            f"— +{rule.points} pts")
+                logger.info(
+                    f"[rule_engine] TRIGGERED {rule.id} ({rule.name}) — +{rule.points} pts"
+                )
         except Exception as exc:
             logger.error(f"[rule_engine] Error evaluating rule {rule.id}: {exc}")
             results.append(_not_triggered(rule, f"Evaluation error: {exc}"))

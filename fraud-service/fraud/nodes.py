@@ -6,6 +6,8 @@ Modification principale :
     au lieu de rules.run_all_rules() (qui était statique).
   - Les règles actives sont lues depuis la table fraud_rules à chaque analyse.
   - Ajouter, modifier ou désactiver une règle en DB est immédiatement pris en compte.
+
+Currency change: all monetary displays updated to EUR (international standard).
 """
 
 from __future__ import annotations
@@ -24,7 +26,7 @@ from .db              import get_rolling_window_days
 from .loader          import filter_by_iban, find_transaction_file, get_account_summary, load_transactions
 from .output_reports  import route_fraud_output
 from .profile_store   import upsert_account_risk_profile
-from .rule_engine     import run_rules_from_db          # ← dynamique (DB)
+from .rule_engine     import run_rules_from_db
 from .scoring         import (
     compute_aml_score,
     compute_behavioral_score,
@@ -78,7 +80,6 @@ def parse_request(state: FraudAgentState) -> dict:
     if not text:
         return {"error": "Message vide."}
 
-    # ── Tentative d'extraction intelligente par LLM ───────────────────
     extraction_prompt = f"""Tu es un extracteur d'entités bancaires expert.
 Extrais l'IBAN et l'intention (action) du message suivant.
 
@@ -91,18 +92,16 @@ Règles :
 Réponds UNIQUEMENT au format JSON :
 {{"iban": "...", "action": "..."}}"""
 
-    iban = ""
+    iban   = ""
     action = "fraud_check"
     try:
-        llm = _get_llm()
+        llm  = _get_llm()
         resp = llm.invoke([HumanMessage(content=extraction_prompt)])
-        import json
         data = json.loads(re.search(r"\{.*\}", resp.content, re.DOTALL).group(0))
-        iban = data.get("iban", "").replace(" ", "").upper()
+        iban   = data.get("iban",   "").replace(" ", "").upper()
         action = data.get("action", "fraud_check")
     except Exception as exc:
         logger.warning(f"[parse_request] LLM extraction failed: {exc}. Falling back to Regex.")
-        # Fallback Regex
         iban = _extract_iban(text)
         if any(w in text.lower() for w in ("export", "télécharge", "download", "exporter")):
             action = "export_transactions"
@@ -139,20 +138,12 @@ def load_data(state: FraudAgentState) -> dict:
 
     db = SessionLocal()
     try:
-        # Read the configured rolling window (default 7 days if not set)
         window_days = get_rolling_window_days()
 
-        # DB-mode: filter by IBAN and window directly in SQL
         df = load_transactions(db=db, iban=iban, window_days=None)
-        # window_days=None here — we use all history for on-demand analysis
-        # (the window is applied in batch/scheduler runs, not interactive ones)
-        # Switch to window_days=window_days once daily ingestion is live (Phase 3)
 
         if df.empty:
-            # Fallback: try CSV file so the service still works during transition
-            logger.warning(
-                f"[load_data] No rows in DB for {iban}, falling back to CSV."
-            )
+            logger.warning(f"[load_data] No rows in DB for {iban}, falling back to CSV.")
             try:
                 df_all = load_transactions(excel_path or None)
                 df     = filter_by_iban(df_all, iban)
@@ -183,7 +174,7 @@ def load_data(state: FraudAgentState) -> dict:
     except Exception as exc:
         logger.exception("[load_data] Unexpected error")
         return {
-            "error": f"Erreur chargement données : {exc}",
+            "error": f"Erreur chargement données : {exc}",
             "transactions_raw": [], "transactions_count": 0,
         }
     finally:
@@ -203,7 +194,7 @@ def route_fraud_action(state: FraudAgentState) -> str:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Nœud 3a — analyze_fraud  ← MODIFIÉ : lecture des règles depuis DB
+# Nœud 3a — analyze_fraud
 # ══════════════════════════════════════════════════════════════════════════════
 
 def analyze_fraud(state: FraudAgentState) -> dict:
@@ -232,32 +223,27 @@ def analyze_fraud(state: FraudAgentState) -> dict:
             "error":            "Aucune donnée à analyser.",
         }
 
-    # ── Ouvrir la session DB pour lire les règles ─────────────────────────
     db = SessionLocal()
     try:
-        # ── Évaluation des règles (dynamique depuis DB) ───────────────────
         rule_results = run_rules_from_db(df, db)
-        logger.info(f"[analyze_fraud] {len(rule_results)} règles évaluées, "
-                    f"{sum(1 for r in rule_results if r['triggered'])} déclenchées")
+        logger.info(
+            f"[analyze_fraud] {len(rule_results)} règles évaluées, "
+            f"{sum(1 for r in rule_results if r['triggered'])} déclenchées"
+        )
 
-        # ── Score comportemental (domaines BEHAVIORAL/VELOCITY/GEO/LIMIT) ─
         score_behavioral, behavioral_signals = compute_behavioral_score(df, db=db)
 
     finally:
         db.close()
 
-    # ── Score AML (toutes règles déclenchées) ─────────────────────────────
-    score_aml = compute_aml_score(rule_results)
-
-    # ── Score final ───────────────────────────────────────────────────────
+    score_aml   = compute_aml_score(rule_results)
     score_final, risk_level = compute_final_score(score_behavioral, score_aml)
+    tracfin     = check_tracfin_required(rule_results, df)
 
-    # ── TRACFIN ───────────────────────────────────────────────────────────
-    tracfin = check_tracfin_required(rule_results, df)
-
-    logger.info(f"[analyze_fraud] Score comportemental={score_behavioral} "
-                f"AML={score_aml} Final={score_final} Niveau={risk_level} "
-                f"TRACFIN={tracfin}")
+    logger.info(
+        f"[analyze_fraud] Score comportemental={score_behavioral} "
+        f"AML={score_aml} Final={score_final} Niveau={risk_level} TRACFIN={tracfin}"
+    )
 
     # ── Sauvegarder le profil de risque en base ───────────────────────────
     iban        = state["iban"]
@@ -290,40 +276,41 @@ def analyze_fraud(state: FraudAgentState) -> dict:
         tracfin_required=tracfin,
     )
 
-    # ── Sélectionner des transactions suspectes pour le LLM ──────────────
-    # On prend les 5 plus gros montants + les transactions liées à des règles
+    # ── Échantillons suspects pour le LLM (affichage EUR) ──────────────
     suspicious_samples = []
     if not df.empty:
-        # Top 5 montants
-        top_amounts = df.sort_values(by=df.columns[df.columns.str.contains("amount|montant")][0], ascending=False).head(5)
-        for _, row in top_amounts.iterrows():
-            amt = row.get('amount')
-            if pd.isna(amt) or amt is None:
-                amt = row.get('transaction_amount')
-            if pd.isna(amt) or amt is None:
-                amt = 0.0
-            
-            try:
-                amt_float = float(amt)
-            except (ValueError, TypeError):
-                amt_float = 0.0
-                
-            suspicious_samples.append(f"• {row.get('timestamp','?')} | {amt_float:,.2f} TND | {row.get('transaction_type','?')} -> {row.get('counterparty_iban','?')}")
+        amount_col = next(
+            (c for c in ("transaction_amount", "amount", "montant") if c in df.columns),
+            None,
+        )
+        if amount_col:
+            top_amounts = df.sort_values(by=amount_col, ascending=False).head(5)
+            for _, row in top_amounts.iterrows():
+                amt = row.get("transaction_amount") or row.get("amount") or 0.0
+                try:
+                    amt_float = float(amt)
+                except (ValueError, TypeError):
+                    amt_float = 0.0
+                # Display EUR (currency is now EUR in the system)
+                suspicious_samples.append(
+                    f"• {row.get('timestamp','?')} | {amt_float:,.2f} EUR "
+                    f"| {row.get('transaction_type','?')} → {row.get('counterparty_iban','?')}"
+                )
 
     return {
-        "fraud_results":    rule_results,
-        "score_behavioral": score_behavioral,
-        "score_aml":        score_aml,
-        "score_final":      score_final,
-        "risk_level":       risk_level,
-        "tracfin_required": tracfin,
-        "report_path":      output_data.get("local_path"),
-        "download_url":     output_data.get("download_url"),
-        "sheet_url":        output_data.get("sheet_url"),
-        "drive_url":        output_data.get("drive_url"),
-        "output_errors":    output_data.get("errors", []),
+        "fraud_results":      rule_results,
+        "score_behavioral":   score_behavioral,
+        "score_aml":          score_aml,
+        "score_final":        score_final,
+        "risk_level":         risk_level,
+        "tracfin_required":   tracfin,
+        "report_path":        output_data.get("local_path"),
+        "download_url":       output_data.get("download_url"),
+        "sheet_url":          output_data.get("sheet_url"),
+        "drive_url":          output_data.get("drive_url"),
+        "output_errors":      output_data.get("errors", []),
         "suspicious_samples": "\n".join(suspicious_samples[:5]),
-        "error":            None,
+        "error":              None,
     }
 
 
@@ -351,7 +338,6 @@ def export_transactions(state: FraudAgentState) -> dict:
     except Exception as exc:
         logger.exception("[export_transactions] Error")
         return {"error": f"Erreur export : {exc}"}
-
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -382,32 +368,41 @@ def generate_summary(state: FraudAgentState) -> dict:
 
     samples_text = state.get("suspicious_samples", "Aucun échantillon disponible.")
 
-    risk_emoji = {"APPROVED": "🟢", "REVIEW": "🟡", "HOLD": "🟠", "BLOCK": "🔴"}.get(risk_level, "⚪")
+    risk_emoji = {
+        "APPROVED": "🟢", "REVIEW": "🟡", "HOLD": "🟠", "BLOCK": "🔴"
+    }.get(risk_level, "⚪")
 
+    # Updated prompt: currency is EUR
     prompt = f"""Tu es le Senior Fraud Compliance Officer (Expert AML/CTF) de BankChat.
 
 IBAN : {iban}
 Score Risque : {score_final}/100 ({risk_level})
 TRACFIN : {"REQUIS ⚠️" if tracfin else "Non requis"}
-Activité : {account_sum.get('total_transactions', 0)} txs ({account_sum.get('total_amount', 0):,.2f} TND)
+Activité : {account_sum.get('total_transactions', 0)} txs ({account_sum.get('total_amount', 0):,.2f} EUR)
 
 Règles déclenchées :
 {rules_text}
 
-Échantillons de transactions notables :
+Échantillons de transactions notables (montants en EUR) :
 {samples_text}
 
 STRUCTURE DU RAPPORT (RÉPONDS EN FRANÇAIS) :
-1. ANALYSE MULTI-FACTEURS : Explique la corrélation entre les règles déclenchées. Ne te contente pas de les lister. (Ex: "Le client effectue des dépôts structurés juste avant des transferts nocturnes vers des IPs étrangères, ce qui suggère une tentative de dissimulation de fonds.")
-2. ÉVALUATION DES ÉCHANTILLONS : Commente brièvement les transactions les plus suspectes citées ci-dessus.
+1. ANALYSE MULTI-FACTEURS : Explique la corrélation entre les règles déclenchées. (Ex: "Le client effectue des dépôts structurés juste avant des transferts nocturnes vers des IPs étrangères, ce qui suggère une tentative de dissimulation de fonds.")
+2. ÉVALUATION DES ÉCHANTILLONS : Commente brièvement les transactions les plus suspectes.
 3. VERDICT & JUSTIFICATION : Confirme le niveau de risque ({risk_level}) et explique pourquoi il est proportionné.
 4. ACTIONS IMMÉDIATES : Liste les étapes (ex: Demander justificatifs, Blocage temporaire, Déclaration TRACFIN).
+
+Seuils de référence (EUR) :
+- Montant élevé : > 5 000 EUR (PSD2)
+- Structuring : > 20 dépôts < 10 000 EUR / 7 jours (5AMLD)
+- Vélocité carte : > 5 / 1h | Virement : > 10 / 10 min
+- Near-threshold : 9 500–9 999 EUR (AML)
+- Nouveau bénéficiaire + transfert immédiat : > 3 000 EUR
 
 TON : Clinique, autoritaire, expert, sans fioritures."""
 
     try:
         llm      = _get_llm()
-        # On utilise un système de chain-of-thought implicite via la structure demandée
         response = llm.invoke([HumanMessage(content=prompt)])
         summary  = response.content.strip()
     except Exception as exc:
@@ -421,7 +416,7 @@ TON : Clinique, autoritaire, expert, sans fioritures."""
     if download_url:
         summary += f"\n\n📥 [Télécharger le rapport Excel]({download_url})"
 
-    # ── Sauvegarder dans le decision log via MailLogService ──────────────────
+    # ── Sauvegarder dans le decision log ─────────────────────────────────────
     decision_log_id = ""
     try:
         from .mail_log_service import MailLogService
@@ -463,6 +458,6 @@ TON : Clinique, autoritaire, expert, sans fioritures."""
         logger.warning(f"[generate_summary] Failed to save decision log: {e}")
 
     return {
-        "llm_summary": summary,
-        "decision_log_id": decision_log_id
+        "llm_summary":     summary,
+        "decision_log_id": decision_log_id,
     }
