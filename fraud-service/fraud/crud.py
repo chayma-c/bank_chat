@@ -7,6 +7,8 @@ Reference: 5AMLD (EU 2018/843), FATF GAFI 2023, PSD2 SCA, OFAC sanctions list.
 """
 
 from __future__ import annotations
+import re
+import unicodedata
 import uuid
 from datetime import datetime, timezone
 from typing import Optional
@@ -16,21 +18,88 @@ from fraud.models  import FraudRuleModel
 from fraud.schemas import FraudRuleCreate, FraudRuleUpdate
 
 
+# ── Duplicate detection helpers ───────────────────────────────────────────────
+
+def _normalize(text: str) -> str:
+    """Lowercase, strip accents, collapse punctuation to spaces."""
+    text = unicodedata.normalize("NFKD", text.lower())
+    text = text.encode("ascii", "ignore").decode()
+    text = re.sub(r"[^\w\s0-9]", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def find_duplicate_rule(
+    db: Session,
+    trigger: str,
+    domain: str,
+    name: str,
+    trigger_detail: str = "",
+    description: str = "",
+    exclude_id: Optional[str] = None,
+) -> Optional[FraudRuleModel]:
+    """
+    Return the first active rule that would duplicate the given fields, or None.
+
+    Layer 1 — normalized trigger exact match:
+      Catches identical conditions written in a different case, with extra spaces,
+      or with light punctuation differences.
+
+    Layer 2 — LLM evaluator-key match within the same domain:
+      Classifies the NEW rule's trigger via the LLM (1 call, not cached).
+      Compares against existing rules' cached keys.
+      Catches the same rule expressed in a different language (FR/EN/AR…)
+      or with a minor name/wording change.
+    """
+    from fraud.llm_rule_classifier import classify_from_fields, classify_rule_intent
+
+    existing = get_all_rules(db)
+    if exclude_id:
+        existing = [r for r in existing if r.id != exclude_id]
+
+    # Layer 1 — normalized trigger exact match
+    norm_new = _normalize(trigger)
+    for rule in existing:
+        if _normalize(rule.trigger) == norm_new:
+            return rule
+
+    # Layer 2 — LLM semantic key match within the same domain
+    new_key = classify_from_fields(name, domain, trigger, trigger_detail, description)
+    if new_key:
+        for rule in existing:
+            if rule.domain != domain:
+                continue
+            existing_key = classify_rule_intent(rule)
+            if existing_key and existing_key == new_key:
+                return rule
+
+    return None
+
+
 # ── Read ──────────────────────────────────────────────────────────────────────
 
 def get_all_rules(db: Session) -> list[FraudRuleModel]:
-    return db.query(FraudRuleModel).order_by(FraudRuleModel.created_at).all()
+    return (
+        db.query(FraudRuleModel)
+        .filter(FraudRuleModel.deleted_at == None)  # noqa: E711
+        .order_by(FraudRuleModel.created_at)
+        .all()
+    )
 
 
 def get_rule(db: Session, rule_id: str) -> Optional[FraudRuleModel]:
-    return db.query(FraudRuleModel).filter(FraudRuleModel.id == rule_id).first()
+    return (
+        db.query(FraudRuleModel)
+        .filter(FraudRuleModel.id == rule_id, FraudRuleModel.deleted_at == None)  # noqa: E711
+        .first()
+    )
 
 
 # ── Create ────────────────────────────────────────────────────────────────────
 
-def create_rule(db: Session, data: FraudRuleCreate) -> FraudRuleModel:
+def create_rule(db: Session, data: FraudRuleCreate, actor: str = "system") -> FraudRuleModel:
     initials = "".join(w[0] for w in data.name.split() if w)[:3].upper()
     rule_id  = f"RL-{initials}-{uuid.uuid4().hex[:6].upper()}"
+    now = datetime.now(timezone.utc)
 
     rule = FraudRuleModel(
         id             = rule_id,
@@ -42,8 +111,10 @@ def create_rule(db: Session, data: FraudRuleCreate) -> FraudRuleModel:
         severity       = data.severity,
         active         = data.active,
         description    = data.description,
-        created_at     = datetime.now(timezone.utc),
-        updated_at     = datetime.now(timezone.utc),
+        created_at     = now,
+        updated_at     = now,
+        created_by     = actor,
+        updated_by     = actor,
     )
     db.add(rule)
     db.commit()
@@ -53,7 +124,7 @@ def create_rule(db: Session, data: FraudRuleCreate) -> FraudRuleModel:
 
 # ── Update (full replace) ─────────────────────────────────────────────────────
 
-def update_rule(db: Session, rule_id: str, data: FraudRuleUpdate) -> Optional[FraudRuleModel]:
+def update_rule(db: Session, rule_id: str, data: FraudRuleUpdate, actor: str = "system") -> Optional[FraudRuleModel]:
     rule = get_rule(db, rule_id)
     if not rule:
         return None
@@ -67,6 +138,7 @@ def update_rule(db: Session, rule_id: str, data: FraudRuleUpdate) -> Optional[Fr
         setattr(rule, field, value)
 
     rule.updated_at = datetime.now(timezone.utc)
+    rule.updated_by = actor
     db.commit()
     db.refresh(rule)
     return rule
@@ -74,12 +146,13 @@ def update_rule(db: Session, rule_id: str, data: FraudRuleUpdate) -> Optional[Fr
 
 # ── Patch (partial — used for toggle active) ──────────────────────────────────
 
-def patch_rule(db: Session, rule_id: str, active: bool) -> Optional[FraudRuleModel]:
+def patch_rule(db: Session, rule_id: str, active: bool, actor: str = "system") -> Optional[FraudRuleModel]:
     rule = get_rule(db, rule_id)
     if not rule:
         return None
     rule.active     = active
     rule.updated_at = datetime.now(timezone.utc)
+    rule.updated_by = actor
     db.commit()
     db.refresh(rule)
     return rule
@@ -87,11 +160,13 @@ def patch_rule(db: Session, rule_id: str, active: bool) -> Optional[FraudRuleMod
 
 # ── Delete ────────────────────────────────────────────────────────────────────
 
-def delete_rule(db: Session, rule_id: str) -> bool:
+def delete_rule(db: Session, rule_id: str, actor: str = "system") -> bool:
     rule = get_rule(db, rule_id)
     if not rule:
         return False
-    db.delete(rule)
+    rule.deleted_at = datetime.now(timezone.utc)
+    rule.deleted_by = actor
+    rule.active     = False
     db.commit()
     return True
 

@@ -652,31 +652,31 @@ def _pick_evaluator(rule: FraudRuleModel):
     t = (rule.trigger + " " + (rule.trigger_detail or "")).lower()
     d = rule.domain.upper()
 
-    evaluator = _keyword_match(t, d)
+    evaluator = _keyword_match(t)
     if evaluator is not _eval_generic:
         return evaluator
 
     # ── LLM fallback: keyword matching failed, ask the model ─────────────────
+    _llm_map = {
+        "large_amount":       _eval_large_amount,
+        "near_threshold":     _eval_near_threshold_amount,
+        "suspicious_iban":    _eval_suspicious_iban,
+        "structuring":        _eval_structuring,
+        "night_transactions": _eval_night_transactions,
+        "foreign_ip":         _eval_foreign_ip,
+        "high_risk_mcc":      _eval_high_risk_mcc,
+        "balance_ratio":      _eval_balance_ratio,
+        "repeated_alerts":    _eval_repeated_alerts,
+        "velocity":           _eval_velocity,
+        "new_beneficiary":    _eval_new_beneficiary,
+        "dormant_account":    _eval_dormant_account,
+        "cross_border":       _eval_cross_border,
+    }
     try:
-        from fraud.llm_rule_classifier import classify_rule_intent, EVALUATOR_DESCRIPTIONS
+        from fraud.llm_rule_classifier import classify_rule_intent
         key = classify_rule_intent(rule)
         if key:
-            llm_map = {
-                "large_amount":       _eval_large_amount,
-                "near_threshold":     _eval_near_threshold_amount,
-                "suspicious_iban":    _eval_suspicious_iban,
-                "structuring":        _eval_structuring,
-                "night_transactions": _eval_night_transactions,
-                "foreign_ip":         _eval_foreign_ip,
-                "high_risk_mcc":      _eval_high_risk_mcc,
-                "balance_ratio":      _eval_balance_ratio,
-                "repeated_alerts":    _eval_repeated_alerts,
-                "velocity":           _eval_velocity,
-                "new_beneficiary":    _eval_new_beneficiary,
-                "dormant_account":    _eval_dormant_account,
-                "cross_border":       _eval_cross_border,
-            }
-            resolved = llm_map.get(key)
+            resolved = _llm_map.get(key)
             if resolved:
                 logger.info(
                     f"[rule_engine] LLM resolved rule {rule.id} ('{rule.name}') → {key}"
@@ -685,10 +685,26 @@ def _pick_evaluator(rule: FraudRuleModel):
     except Exception as exc:
         logger.warning(f"[rule_engine] LLM fallback unavailable for rule {rule.id}: {exc}")
 
-    return evaluator  # _eval_generic with its warning
+    # ── Domain-based last resort (coarse — correct direction, wrong evaluator) ─
+    _domain_map = {
+        "LIMIT":      _eval_large_amount,
+        "AML":        _eval_structuring,
+        "VELOCITY":   _eval_velocity,
+        "GEOGRAPHIC": _eval_foreign_ip,
+        "BEHAVIORAL": _eval_balance_ratio,
+    }
+    domain_fallback = _domain_map.get(d)
+    if domain_fallback:
+        logger.warning(
+            f"[rule_engine] Rule {rule.id} ('{rule.name}'): "
+            f"using coarse domain fallback ({d} → {domain_fallback.__name__})"
+        )
+        return domain_fallback
+
+    return _eval_generic
 
 
-def _keyword_match(t: str, d: str):
+def _keyword_match(t: str):
     """
     Pure keyword dispatch on lowercased trigger text.
     Returns _eval_generic when no keyword matches (signals 'unrecognized').
@@ -745,15 +761,7 @@ def _keyword_match(t: str, d: str):
     if "amount" in t and (">" in t or ">" in t):
         return _eval_large_amount
 
-    # Domain-based coarse fallback
-    domain_map = {
-        "LIMIT":      _eval_large_amount,
-        "AML":        _eval_structuring,
-        "VELOCITY":   _eval_velocity,
-        "GEOGRAPHIC": _eval_foreign_ip,
-        "BEHAVIORAL": _eval_balance_ratio,
-    }
-    return domain_map.get(d, _eval_generic)
+    return _eval_generic
 
 
 # ══════════════════════════════════════════════════════════════════════════════

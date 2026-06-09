@@ -117,6 +117,37 @@ def classify_rule_intent(rule) -> Optional[str]:
         return None
 
 
+def classify_from_fields(
+    name: str,
+    domain: str,
+    trigger: str,
+    trigger_detail: str = "",
+    description: str = "",
+) -> Optional[str]:
+    """
+    Classify a rule by raw field values without a DB model object.
+    Result is NOT cached — intended for transient duplicate-check calls only.
+    """
+    class _Stub:
+        pass
+    stub = _Stub()
+    stub.name          = name
+    stub.domain        = domain
+    stub.trigger       = trigger
+    stub.trigger_detail = trigger_detail or ""
+    stub.description   = (description or "")[:300]
+
+    try:
+        llm  = _get_llm()
+        resp = llm.invoke([HumanMessage(content=_build_prompt(stub))])
+        raw  = resp.content.strip().lower()
+        key  = raw.split()[0].rstrip(".,;:")
+        return key if key in VALID_KEYS else None
+    except Exception as exc:
+        logger.warning(f"[llm_classifier] classify_from_fields failed: {exc}")
+        return None
+
+
 def invalidate_rule_cache(rule_id: str) -> None:
     """
     Remove cached classification for a rule.

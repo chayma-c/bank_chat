@@ -156,3 +156,26 @@ async def require_bank_agent(
         )
 
     return payload
+
+
+async def require_admin(
+    creds: Annotated[
+        HTTPAuthorizationCredentials | None,
+        Depends(_bearer),
+    ],
+) -> dict:
+    """
+    FastAPI dependency: caller must present a valid JWT with the 'admin' realm role.
+    Required for all write operations on fraud rules (create, update, delete).
+
+    Raises:
+        401 — missing / expired / invalid token
+        403 — valid token but not admin
+    """
+    payload = await require_bank_agent(creds)
+    if "admin" not in _extract_roles(payload):
+        raise HTTPException(
+            status_code=403,
+            detail="Access denied: 'admin' realm role required for rule management.",
+        )
+    return payload

@@ -103,6 +103,11 @@ class FraudRuleModel(Base):
     created_at    = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at    = Column(DateTime, default=lambda: datetime.now(timezone.utc),
                            onupdate=lambda: datetime.now(timezone.utc))
+    # ── Audit trail ───────────────────────────────────────────────────────────
+    created_by    = Column(String(128),  nullable=True)
+    updated_by    = Column(String(128),  nullable=True)
+    deleted_at    = Column(DateTime,     nullable=True, default=None)
+    deleted_by    = Column(String(128),  nullable=True)
 
     def to_dict(self) -> dict:
         return {

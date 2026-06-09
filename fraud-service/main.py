@@ -14,22 +14,24 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from langchain_core.messages import HumanMessage
-
+ 
 from fraud.database     import SessionLocal, Base, engine
-from fraud.models       import FraudRuleModel ,FraudDecisionLog         # noqa: F401
+from fraud.models       import FraudRuleModel, FraudDecisionLog         # noqa: F401
 from fraud.crud         import seed_default_rules
-from fraud.rule_router import router as rule_router
+from fraud.rule_router  import router as rule_router
 from fraud.graph        import run_fraud_agent
 from typing import Optional
 import asyncio
-from fraud.db import init_db, get_settings, update_settings
-from fraud.scheduler import scheduler_loop, run_global_analysis_task
-from fraud.loader import seed_transactions_from_csv
-from fraud.auth import require_bank_agent
-from sqlalchemy import desc
+from fraud.db           import init_db, get_settings, update_settings
+from fraud.scheduler    import scheduler_loop, run_global_analysis_task
+from fraud.loader       import seed_transactions_from_csv
+from fraud.auth         import require_bank_agent, verify_report_signature, generate_report_signature
+from sqlalchemy         import desc
 from fraud.mail_log_service import MailLogService
+from fastapi.security   import HTTPBearer
 
 logger = logging.getLogger(__name__)
+_bearer_optional = HTTPBearer(auto_error=False)
 
 
 @asynccontextmanager
@@ -99,13 +101,12 @@ async def get_fraud_settings():
     s = get_settings()
     if not s:
         return {"frequency": "manual", "time": "02:00", "dayOfWeek": 1}
-    # Mapping UI fields (time, dayOfWeek) to DB fields (scheduled_time, day_of_week)
     return {
-        "frequency": s.get("frequency", "manual"),
-        "time":      s.get("scheduled_time", "02:00"),
-        "dayOfWeek": s.get("day_of_week", 1),
-        "lastRun":   s.get("last_run"),
-        "lastAutoRun": s.get("last_auto_run")
+        "frequency":   s.get("frequency", "manual"),
+        "time":        s.get("scheduled_time", "02:00"),
+        "dayOfWeek":   s.get("day_of_week", 1),
+        "lastRun":     s.get("last_run"),
+        "lastAutoRun": s.get("last_auto_run"),
     }
 
 @app.post("/settings")
@@ -168,7 +169,8 @@ class MailUpdatePayload(BaseModel):
 @app.post("/analyze")
 async def analyze(
     req: FraudRequest,
-    _user: dict = Depends(require_bank_agent)):
+    _user: dict = Depends(require_bank_agent),
+):
     iban = req.iban or extract_iban_from_text(req.message)
     if req.message:
         user_content = req.message
@@ -176,9 +178,9 @@ async def analyze(
         user_content = f"Analyse les fraudes pour l'IBAN {iban}"
     else:
         return {"error": "IBAN requis.", "llm_summary": "❌ IBAN non fourni."}
-
+ 
     messages = [HumanMessage(content=user_content)]
-    result = run_fraud_agent(
+    result   = run_fraud_agent(
         messages=messages,
         user_id=req.user_id,
         session_id=req.session_id,
@@ -205,55 +207,56 @@ async def analyze(
         "decision_log_id":    result.get("decision_log_id", ""),
     }
 
-
-from fraud.auth import require_bank_agent, verify_report_signature
-from fastapi.security import HTTPBearer
-
-_bearer_optional = HTTPBearer(auto_error=False)
-
 @app.get("/reports/{filename}")
 async def download_report(
     filename: str,
+    # FIX : `expires` supprimé — auth.py ne gère PAS l'expiry dans verify_report_signature
+    # L'ancien code attendait expires + signature → rejetait les requêtes avec 401
     signature: str | None = None,
-    creds = Depends(_bearer_optional)
+    creds=Depends(_bearer_optional),
 ):
     """
-    Download a report. 
-    Supports two auth modes:
-    1. Bearer Token (standard API access)
-    2. Signed URL (for browser clicks, using 'expires' and 'signature' params)
+    Download a report.
+ 
+    Deux modes d'auth :
+      1. Bearer Token  — accès standard via Keycloak
+      2. Signed URL    — signature HMAC sur le filename (sans expiry)
+ 
+    FIX :
+      - Suppression du paramètre `expires` (non géré par auth.py)
+      - verify_report_signature(filename, signature) — 2 args seulement
     """
     is_authed = False
-    
-    # Mode 1: Bearer Token
+ 
+    # Mode 1 : Bearer Token
     if creds:
         try:
             await require_bank_agent(creds)
             is_authed = True
         except HTTPException:
             pass
-            
-    # Mode 2: HMAC Signature fallback (signature now tied to filename only)
+ 
+    # Mode 2 : Signature HMAC (signature sur le filename uniquement)
     if not is_authed:
         if not signature:
             raise HTTPException(
                 status_code=401,
-                detail="Authentication required: Provide a Bearer token or a valid signed URL."
+                detail="Authentication required: Provide a Bearer token or a valid signed URL.",
             )
-
+        # FIX : verify_report_signature(filename, signature) — sans expires
         if not verify_report_signature(filename, signature):
             raise HTTPException(
                 status_code=403,
-                detail="Access denied: Invalid signature."
+                detail="Access denied: Invalid signature.",
             )
-
+ 
     if ".." in filename or "/" in filename or "\\" in filename:
         raise HTTPException(status_code=400, detail="Nom de fichier invalide.")
-    
+ 
     filepath = _reports_dir() / filename
     if not filepath.is_file():
         raise HTTPException(status_code=404, detail=f"Rapport non trouvé : {filename}")
-        
+ 
     return FileResponse(
         path=str(filepath),
         filename=filename,
@@ -270,7 +273,8 @@ async def list_reports(_user: dict = Depends(require_bank_agent)):
         "reports": [
             {
                 "filename":     f.name,
-                "download_url": f"{base}/reports/{f.name}",
+                # FIX : signature sans expires
+                "download_url": f"{base}/reports/{f.name}?signature={generate_report_signature(f.name)}",
                 "size_kb":      round(f.stat().st_size / 1024, 1),
                 "created_at":   datetime.fromtimestamp(f.stat().st_mtime).strftime("%Y-%m-%d %H:%M:%S"),
             }
@@ -361,21 +365,21 @@ async def update_log_mail(log_id: str, data: MailUpdatePayload, _user: dict = De
     """
     db = SessionLocal()
     try:
-        svc = MailLogService(db)
+        svc     = MailLogService(db)
         updated = svc.update_with_mail(
-            log_id         = log_id,
-            mail_sent      = data.mail_sent,
-            mail_recipient = data.mail_recipient,
-            mail_template  = data.mail_template,
-            mail_status    = data.mail_status,
-            mail_id        = data.mail_id,
+            log_id=log_id,
+            mail_sent=data.mail_sent,
+            mail_recipient=data.mail_recipient,
+            mail_template=data.mail_template,
+            mail_status=data.mail_status,
+            mail_id=data.mail_id,
         )
         if not updated:
             raise HTTPException(404, detail=f"Log {log_id} not found")
         return {"status": "updated", "log_id": log_id, "mail_sent": data.mail_sent}
     finally:
         db.close()
- 
+
 @app.patch("/decision-logs/{log_id}/mail")
 async def update_log_mail_endpoint(
     log_id: str,
