@@ -5,6 +5,7 @@ import {
 import { CommonModule } from '@angular/common';
 import { FormsModule   } from '@angular/forms';
 import { FraudRule, RuleFormData, RiskDomain, Severity } from './fraud-rule.model';
+import { ApiError } from './fraud-rules.service';
 
 @Component({
   selector:    'app-rule-modal',
@@ -14,12 +15,14 @@ import { FraudRule, RuleFormData, RiskDomain, Severity } from './fraud-rule.mode
   styleUrl:    './rule-modal.component.css',
 })
 export class RuleModalComponent implements OnInit {
-  @Input()  mode:    'create' | 'edit' | 'delete' = 'create';
-  @Input()  rule:    FraudRule | null = null;
-  @Input()  saving:  boolean = false;          // ← Input manquant — cause du build error
-  @Output() saved   = new EventEmitter<RuleFormData>();
-  @Output() deleted = new EventEmitter<void>();
-  @Output() closed  = new EventEmitter<void>();
+  @Input()  mode:        'create' | 'edit' | 'delete' = 'create';
+  @Input()  rule:        FraudRule | null = null;
+  @Input()  saving:      boolean = false;
+  @Input()  serverError: ApiError | null = null;
+  @Output() saved        = new EventEmitter<RuleFormData>();
+  @Output() deleted      = new EventEmitter<void>();
+  @Output() closed       = new EventEmitter<void>();
+  @Output() errorCleared = new EventEmitter<void>();
 
   readonly domains:    RiskDomain[] = ['VELOCITY', 'LIMIT', 'GEOGRAPHIC', 'AML', 'BEHAVIORAL'];
   readonly severities: Severity[]   = ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'];
@@ -63,6 +66,11 @@ export class RuleModalComponent implements OnInit {
 
   updateField<K extends keyof RuleFormData>(key: K, value: RuleFormData[K]): void {
     this.form.update(f => ({ ...f, [key]: value }));
+    if (this.serverError) this.errorCleared.emit();
+  }
+
+  dismissError(): void {
+    this.errorCleared.emit();
   }
 
   submit(): void {

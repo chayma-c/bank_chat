@@ -41,11 +41,6 @@ export const routes: Routes = [
           import('./fraud-admin/decision-logs.component').then(m => m.DecisionLogsComponent),
       },
       {
-        path: 'model-config',
-        loadComponent: () =>
-          import('./fraud-admin/fraud-admin.component').then(m => m.FraudAdminComponent),
-      },
-      {
         path: 'users',
         loadComponent: () =>
           import('./admin/users/user-management.component').then(m => m.UserManagementComponent),

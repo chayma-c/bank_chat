@@ -72,6 +72,34 @@
     <ng-container *ngIf="!isDelete">
       <div class="modal-body">
 
+        <!-- Inline server-error / duplicate-conflict banner -->
+        <div *ngIf="serverError" class="server-banner" [ngClass]="'server-banner--' + serverError.type">
+          <div class="server-banner__icon">
+            <!-- conflict = warning triangle -->
+            <svg *ngIf="serverError.type === 'conflict'" width="18" height="18" viewBox="0 0 20 20" fill="none"
+              stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M10 2L2 17h16L10 2z"/><path d="M10 9v4"/><circle cx="10" cy="15" r=".5" fill="currentColor"/>
+            </svg>
+            <!-- generic error = circle X -->
+            <svg *ngIf="serverError.type === 'error'" width="18" height="18" viewBox="0 0 20 20" fill="none"
+              stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+              <circle cx="10" cy="10" r="8"/><path d="M7 7l6 6M13 7l-6 6"/>
+            </svg>
+          </div>
+          <div class="server-banner__body">
+            <p class="server-banner__title">
+              {{ serverError.type === 'conflict' ? 'Duplicate rule detected' : 'Could not save rule' }}
+            </p>
+            <p class="server-banner__msg">{{ serverError.message }}</p>
+          </div>
+          <button class="server-banner__close" (click)="dismissError()" title="Dismiss">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor"
+              stroke-width="2" stroke-linecap="round">
+              <path d="M2 2l12 12M14 2L2 14"/>
+            </svg>
+          </button>
+        </div>
+
         <!-- Rule name -->
         <div class="form-group">
           <label class="form-label">Rule name <span class="required">*</span></label>

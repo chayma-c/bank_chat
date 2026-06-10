@@ -238,8 +238,19 @@
         active         BOOLEAN       NOT NULL DEFAULT TRUE,
         description    TEXT          DEFAULT '',
         created_at     TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
-        updated_at     TIMESTAMPTZ   NOT NULL DEFAULT NOW()
+        updated_at     TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+        -- audit trail (P0 security fix)
+        created_by     VARCHAR(128),
+        updated_by     VARCHAR(128),
+        deleted_at     TIMESTAMPTZ,
+        deleted_by     VARCHAR(128)
     );
+
+    -- Migration pour bases existantes : ajout des colonnes d'audit si absentes
+    ALTER TABLE fraud_rules ADD COLUMN IF NOT EXISTS created_by  VARCHAR(128);
+    ALTER TABLE fraud_rules ADD COLUMN IF NOT EXISTS updated_by  VARCHAR(128);
+    ALTER TABLE fraud_rules ADD COLUMN IF NOT EXISTS deleted_at  TIMESTAMPTZ;
+    ALTER TABLE fraud_rules ADD COLUMN IF NOT EXISTS deleted_by  VARCHAR(128);
 
     -- Auto-update updated_at on every UPDATE
     CREATE OR REPLACE FUNCTION update_updated_at()

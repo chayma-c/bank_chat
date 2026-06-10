@@ -5,6 +5,11 @@ import { catchError, map }                       from 'rxjs/operators';
 import { environment }                           from '../../environments/environment';
 import { FraudRule, RuleFormData, FraudMetrics } from './fraud-rule.model';
 
+export interface ApiError {
+  type: 'conflict' | 'error';
+  message: string;
+}
+
 @Injectable({ providedIn: 'root' })
 export class FraudRulesService {
   private readonly http = inject(HttpClient);
@@ -38,8 +43,8 @@ export class FraudRulesService {
     this.http.get<FraudRule[]>(this.base).pipe(
       catchError(err => this.handleError(err))
     ).subscribe({
-      next:  rules => { this._rules.set(rules); this._loading.set(false); },
-      error: msg   => { this._error.set(msg);   this._loading.set(false); },
+      next:  rules    => { this._rules.set(rules);        this._loading.set(false); },
+      error: (e: ApiError) => { this._error.set(e.message); this._loading.set(false); },
     });
   }
 
@@ -99,12 +104,21 @@ export class FraudRulesService {
 
   // ── Error handling ────────────────────────────────────────────────────────
   private handleError(err: HttpErrorResponse): Observable<never> {
-    let msg = 'An unexpected error occurred';
-    if (err.status === 0)   msg = 'Cannot reach the fraud service. Check network / CORS.';
-    if (err.status === 404) msg = 'Rule not found.';
-    if (err.status === 422) msg = 'Validation error: ' + JSON.stringify(err.error?.detail ?? '');
-    if (err.status >= 500)  msg = 'Server error. Please try again.';
+    let type: ApiError['type'] = 'error';
+    let message = 'An unexpected error occurred. Please try again.';
+
+    if (err.status === 0)   message = 'Cannot reach the fraud service. Check network or CORS settings.';
+    if (err.status === 401) message = 'Authentication required. Please sign in.';
+    if (err.status === 403) message = 'You do not have permission to perform this action.';
+    if (err.status === 404) message = 'Rule not found.';
+    if (err.status === 409) {
+      type    = 'conflict';
+      message = err.error?.detail ?? 'A rule with the same semantic intent already exists.';
+    }
+    if (err.status === 422) message = 'Validation error: ' + JSON.stringify(err.error?.detail ?? '');
+    if (err.status >= 500)  message = 'Server error. Please try again later.';
+
     console.error('[FraudRulesService]', err);
-    return throwError(() => msg);
+    return throwError(() => ({ type, message } as ApiError));
   }
 }

@@ -4,8 +4,8 @@ import {
 import { CommonModule } from '@angular/common';
 import { FormsModule   } from '@angular/forms';
 import { RouterModule  } from '@angular/router';
-import { FraudRulesService }  from './fraud-rules.service';
-import { RuleModalComponent } from './rule-modal.component';
+import { FraudRulesService, ApiError } from './fraud-rules.service';
+import { RuleModalComponent }          from './rule-modal.component';
 import { FraudRule, RuleFormData, RiskDomain } from './fraud-rule.model';
 
 type ModalMode = 'create' | 'edit' | 'delete';
@@ -32,6 +32,9 @@ export class FraudAdminComponent implements OnInit {
 
   // ── Toast ─────────────────────────────────────────────────────────────────
   toast = signal<{ msg: string; type: 'success' | 'error' } | null>(null);
+
+  // ── Inline modal error (409 conflict stays inside the modal) ──────────────
+  saveError = signal<ApiError | null>(null);
 
   // ── Exposed from service ──────────────────────────────────────────────────
   readonly metrics     = this.svc.metrics;
@@ -71,23 +74,39 @@ export class FraudAdminComponent implements OnInit {
     this.modalMode.set(null);
     this.selectedRule.set(null);
     this.saving.set(false);
+    this.saveError.set(null);
   }
 
   // ── CRUD handlers ─────────────────────────────────────────────────────────
   onSave(data: RuleFormData): void {
     this.saving.set(true);
+    this.saveError.set(null);
     const mode = this.modalMode();
 
     if (mode === 'create') {
       this.svc.createRule(data).subscribe({
         next:  () => { this.closeModal(); this.showToast('Rule created successfully', 'success'); },
-        error: (msg: string) => { this.saving.set(false); this.showToast(msg, 'error'); },
+        error: (err: ApiError) => {
+          this.saving.set(false);
+          if (err.type === 'conflict') {
+            this.saveError.set(err);           // shown inline inside the modal
+          } else {
+            this.showToast(err.message, 'error');
+          }
+        },
       });
 
     } else if (mode === 'edit' && this.selectedRule()) {
       this.svc.updateRule(this.selectedRule()!.id, data).subscribe({
         next:  () => { this.closeModal(); this.showToast('Rule updated successfully', 'success'); },
-        error: (msg: string) => { this.saving.set(false); this.showToast(msg, 'error'); },
+        error: (err: ApiError) => {
+          this.saving.set(false);
+          if (err.type === 'conflict') {
+            this.saveError.set(err);           // shown inline inside the modal
+          } else {
+            this.showToast(err.message, 'error');
+          }
+        },
       });
     }
   }
@@ -99,7 +118,7 @@ export class FraudAdminComponent implements OnInit {
 
     this.svc.deleteRule(rule.id).subscribe({
       next:  () => { this.closeModal(); this.showToast('Rule deleted', 'success'); },
-      error: (msg: string) => { this.saving.set(false); this.showToast(msg, 'error'); },
+      error: (err: ApiError) => { this.saving.set(false); this.showToast(err.message, 'error'); },
     });
   }
 
