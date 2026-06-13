@@ -355,8 +355,15 @@
 .impact-high { background: #dc2626; color: #b91c1c; }
 .impact-med  { background: #f59e0b; color: #92400e; }
 .impact-low  { background: #22c55e; color: #15803d; }
-.impact-label { font-size: 0.65rem; font-weight: 600; text-transform: uppercase; }
-.impact-pts  { font-size: 0.68rem; color: #9ca3af; margin-top: 2px; }
+.impact-label {
+  font-size: 0.65rem; font-weight: 600; text-transform: uppercase;
+  padding: 2px 6px; border-radius: 10px;
+}
+/* Badge severity — fond clair + texte lisible (la barre garde les couleurs saturées ci-dessus) */
+.impact-label.impact-high { background: #fef2f2; color: #b91c1c; }
+.impact-label.impact-med  { background: #fffbeb; color: #92400e; }
+.impact-label.impact-low  { background: #f0fdf4; color: #166534; }
+.impact-pts  { font-size: 0.68rem; color: #6b7280; margin-top: 2px; font-weight: 500; }
 
 /* Toggle — même style que les toggles du chatbot */
 .toggle {

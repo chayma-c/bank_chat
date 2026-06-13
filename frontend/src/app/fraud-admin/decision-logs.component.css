@@ -215,9 +215,10 @@
   display: inline-block; font-size: 0.65rem; font-weight: 600;
   padding: 2px 7px; border-radius: 20px;
 }
-.mail-sent   { background: #dcfce7; color: #15803d; }
-.mail-failed { background: #fee2e2; color: #b91c1c; }
-.mail-none   { background: transparent; color: #9ca3af; }
+.mail-sent    { background: #dcfce7; color: #15803d; }
+.mail-failed  { background: #fee2e2; color: #b91c1c; }
+.mail-none    { background: #f3f4f6; color: #9ca3af; }
+.mail-pending { background: transparent; color: #d1d5db; }
 
 /* Report link */
 .report-link {

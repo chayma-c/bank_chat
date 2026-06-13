@@ -691,6 +691,26 @@ async def mail_agent(state: BankChatState) -> BankChatState:
     should_send = score_final >= 50 or tracfin
     if not should_send:
         logger.info(f"[mail_agent] score={score_final} < 50 and tracfin=False — no mail.")
+        decision_log_id = context.get("decision_log_id", "") or state.get("decision_log_id", "")
+        if decision_log_id:
+            try:
+                _auth_headers = {"Authorization": f"Bearer {state.get('auth_token')}"} if state.get("auth_token") else {}
+                async with httpx.AsyncClient() as client:
+                    await client.patch(
+                        f"{FRAUD_SERVICE_URL}/decision-logs/{decision_log_id}/mail",
+                        json={
+                            "mail_sent":      False,
+                            "mail_recipient": None,
+                            "mail_template":  None,
+                            "mail_status":    "non_requis",
+                            "mail_id":        None,
+                        },
+                        headers=_auth_headers,
+                        timeout=5.0,
+                    )
+                logger.info(f"[mail_agent] Decision log {decision_log_id} marqué non_requis (score={score_final})")
+            except Exception as e:
+                logger.warning(f"[mail_agent] Could not update decision log (non_requis): {e}")
         return {**state, "agent": "mail_agent"}
 
     # Choix du template selon seuil

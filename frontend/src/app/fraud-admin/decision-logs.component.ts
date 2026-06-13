@@ -139,8 +139,7 @@ export class DecisionLogsComponent implements OnInit {
       switchMap(() => this.svc.getLog(logId)),
       takeWhile((fresh) => {
         attempts++;
-        if (fresh.mail_sent || attempts >= maxAttempts) {
-          // Update drawer with final state and stop polling
+        if (fresh.mail_sent || fresh.mail_status === 'non_requis' || attempts >= maxAttempts) {
           this.selectedLog.set(fresh);
           return false;
         }
@@ -189,13 +188,15 @@ export class DecisionLogsComponent implements OnInit {
   }
 
   mailStatusClass(log: DecisionLog): string {
-    if (!log.mail_sent) return 'mail-none';
+    if (log.mail_status === 'non_requis') return 'mail-none';
+    if (!log.mail_sent) return 'mail-pending';
     return log.mail_status === 'sent' ? 'mail-sent' : 'mail-failed';
   }
 
   mailLabel(log: DecisionLog): string {
+    if (log.mail_status === 'non_requis') return 'Non requis';
     if (!log.mail_sent) return '—';
-    return log.mail_status === 'sent' ? '✓ Sent' : '✗ Failed';
+    return log.mail_status === 'sent' ? '✓ Envoyé' : '✗ Échec';
   }
 
   trackById(_: number, log: DecisionLog): string { return log.id; }
