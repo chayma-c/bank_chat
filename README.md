@@ -1,30 +1,149 @@
-# 🏦 BankChat — AI-Powered Banking Assistant
+# BankChat — AI-Powered Banking Assistant
 
-An intelligent banking chatbot built with **Angular 21**, **Django 6**, **LangGraph** multi-agent orchestration, **Keycloak** authentication, a dedicated **fraud-detection microservice**, and an **intelligent memory system** (Redis + PostgreSQL).
+An intelligent banking chatbot built with **Angular**, **Django 6**, **LangGraph** multi-agent orchestration, **Keycloak** authentication, dedicated microservices for fraud detection, natural-language SQL queries, and email alerting, all behind an **Nginx API Gateway**.
+
+---
 
 ## Architecture
 
 ```
-┌─────────────┐     JWT      ┌─────────────┐     LangGraph     ┌──────────────────┐
-│   Angular    │ ──Bearer──▶  │   Django     │ ───────────────▶  │  Ollama / Groq   │
-│  (frontend)  │ ◀──JSON───  │  (backend)   │ ◀───────────────  │  (LLaMA 3)       │
-└──────┬───────┘              └──────┬───────┘                   └──────────────────┘
-       │                             │
-       │  OAuth2/OIDC                ├── PostgreSQL  (messages + résumés archivés)
-       ▼                             └── Redis       (cache résumé session TTL 1h)
-┌─────────────┐
-│  Keycloak   │
-│   (auth)    │
-└─────────────┘
+                          ┌──────────────────────────────────────────┐
+                          │          NGINX API GATEWAY (:80)         │
+                          │                                          │
+  Browser ──Bearer JWT──▶ │  /api/   → Django Orchestrateur (:8000) │
+                          │  /fraud/ → Fraud Service      (:8001)   │
+                          │  /mail/  → Mail Service       (:8002)   │
+                          │  /sql/   → Text-to-SQL Service(:8003)   │
+                          │  /auth/  → Keycloak           (:8080)   │
+                          │  /       → Angular SPA        (:4200)   │
+                          └──────────────────────────────────────────┘
 ```
 
-### Fraud analysis service
+### Services overview
 
-The fraud-analysis flow runs in a separate FastAPI service at `http://localhost:8001`.
-It reads the shared transaction dataset from `backend/data/transactions.xlsx`.
-Inside Docker, that folder is mounted to `/app/data`, so the file becomes `/app/data/transactions.xlsx`.
+| Service | Container | Port | Role |
+|---------|-----------|------|------|
+| Angular (frontend) | `bank_chat_frontend` | `4200` | SPA UI |
+| Nginx (API Gateway) | `bank_chat_gateway` | `80` | Single entry point, reverse-proxy |
+| Django (orchestrateur) | `bank_chat_orchestrateur` | `8000` | LangGraph, chat API, auth |
+| Fraud Service | `bank_chat_fraud` | `8001` | Fraud analysis (FastAPI + LangGraph) |
+| Mail Service | `bank_chat_mail` | `8002` | SMTP emails + audit log (FastAPI) |
+| Text-to-SQL Service | `bank_chat_text2sql` | `8003` | NL → SQL → results (FastAPI) |
+| Keycloak | `bank_chat_keycloak` | `8080` | OAuth2 / OIDC authentication |
+| PostgreSQL | `bank_chat_db` | `5432` | Primary data store (4 databases) |
+| Redis | `bank_chat_redis` | `6379` | Session summary cache (TTL 1 h) |
 
-## Memory System Architecture
+### PostgreSQL databases
+
+| Database | User | Used by |
+|----------|------|---------|
+| `keycloak_db` | `keycloak_user` | Keycloak |
+| `bank_orchestrateur` | `orchestrateur_user` | Django chatbot (conversations, messages) |
+| `banking_data` | `fraud_user` / `sql_user` | Fraud service + Text-to-SQL (transactions, fraud_rules, fraud_decision_logs) |
+| `mail_db` | `mail_user` | Mail service (sent_emails audit table) |
+
+---
+
+## LangGraph Multi-Agent Orchestration
+
+```
+User message
+     │
+     ▼
+┌───────────────────┐
+│  Detect Intent    │  (LLM classifies the request)
+│  (Django / graph) │
+└────────┬──────────┘
+         │
+  ┌──────┴──────────────────────────────────┐
+  ▼         ▼          ▼         ▼          ▼
+Account  Transfer  Support   Fraud     SQL Agent   Fallback
+ Agent    Agent    Agent     Agent     (bank_agent  Agent
+  │         │        │         │       / admin only)  │
+  ▼         ▼        ▼         │                     ▼
+ LLM       LLM      LLM        │                    LLM
+                               ▼
+                   ┌─────────────────────────┐
+                   │  Fraud Service (:8001)   │
+                   │  13 rules + scoring      │
+                   │  TRACFIN report          │
+                   │  Excel export            │
+                   └───────────┬─────────────┘
+                               │
+                               ▼
+                   Mail Service (:8002) — sends fraud alert email
+```
+
+### Role-gated agents
+
+| Agent | Required role |
+|-------|--------------|
+| `fraud` | `bank_agent` or `admin` |
+| `sql` | `bank_agent` or `admin` |
+| All others | Any authenticated user |
+
+---
+
+## Text-to-SQL Service
+
+Converts natural language banking questions into validated SQL, executes them on the `banking_data` database, and returns business-readable results.
+
+**Pipeline:** NL question → LLM generates SQL → security validation → PostgreSQL execution → formatted response
+
+**Accessible tables:** `transactions`, `fraud_rules`, `fraud_decision_logs`
+
+**Security:**
+- SELECT-only: DML (INSERT/UPDATE/DELETE/DROP) blocked
+- System tables (`pg_*`, `information_schema`) blocked
+- Dangerous functions blocked
+- JWT required — `bank_agent` or `admin` role only
+
+**Endpoints (via gateway `/sql/`):**
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/sql/query` | NL question → SQL → results |
+| `GET` | `/sql/schema` | Whitelisted tables and columns |
+| `GET` | `/sql/examples` | Pre-built example questions |
+| `GET` | `/sql/health` | Health check (public) |
+
+---
+
+## Mail Service
+
+Independent SMTP microservice. Renders Jinja2 HTML templates, sends emails via SMTP, and logs every send attempt to PostgreSQL.
+
+**Email templates:** `fraud_alert`, `critical_alert`, `client_response`, `nightly_report`
+
+**Endpoints (via gateway `/mail/`):**
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/mail/send` | Send an email with optional attachment |
+| `GET` | `/mail/history` | Paginated email audit log (filter by template, status, IBAN) |
+| `GET` | `/mail/stats` | Dashboard counts (by template, by status, TRACFIN count) |
+| `GET` | `/mail/health` | Health check + DB connectivity |
+
+---
+
+## Fraud Detection Service
+
+**Endpoints (via gateway `/fraud/`):**
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/fraud/analyze` | Full fraud analysis (IBAN + action) |
+| `GET` | `/fraud/health` | Health check |
+| `GET` | `/fraud/reports/<file>` | Download Excel report (no auth — filename is the secret) |
+
+**Transaction file lookup order:**
+1. `FRAUD_DATA_DIR` env var if set
+2. `/app/data/transactions.xlsx` (Docker)
+3. `backend/data/transactions.xlsx` (local dev)
+
+---
+
+## Memory System
 
 ```
 Every message →
@@ -34,27 +153,36 @@ Every message →
         │
         ├─ 2. Split: old msgs (to summarize) + recent 12 msgs (keep intact)
         │
-        ├─ 3. Redis HIT?  ──YES──▶ use cached summary (~1ms)
+        ├─ 3. Redis HIT? ──YES──▶ use cached summary (~1 ms)
         │         │
         │        NO
         │         ▼
-        │    Generate summary via LLM → store in Redis (TTL 1h)
+        │    Generate summary via LLM → store in Redis (TTL 1 h)
         │
         └─ 4. Assemble context within 3,000 token budget
                 [summary ~200 tokens] + [12 recent msgs] + [new message]
-                         │
                          ▼
-                    LLM (Ollama / Groq)
+                   LLM (Ollama / Groq)
 
 Nightly archiving (02:00) →
   archive_messages management command
-        │
         ├─ Conversations with > 50 messages
         ├─ Generate consolidated LLM summary
         ├─ Save summary → Conversation.summary (PostgreSQL)
         └─ Delete old messages (keep last 12)
              Result: ~94% reduction in PostgreSQL size
 ```
+
+### Storage summary
+
+| Data | Where | Lifetime |
+|------|-------|---------|
+| All messages (raw) | PostgreSQL `chatbot_message` | Permanent until archiving |
+| Archived summary | PostgreSQL `chatbot_conversation.summary` | Permanent |
+| Session summary cache | Redis `bankchat:mem:{session}:summary` | 1 hour TTL |
+| Email audit log | PostgreSQL `mail_db.sent_emails` | Permanent |
+
+---
 
 ## Prerequisites
 
@@ -66,27 +194,31 @@ Nightly archiving (02:00) →
 | Docker | 20+ | `docker --version` |
 | Ollama | latest | `ollama --version` |
 
+---
+
 ## Quick Start (Docker — recommended)
 
-### 1) Start all services
+### 1. Start all services
 
 ```powershell
 docker compose up -d --build
 ```
 
 Services started:
-- PostgreSQL on `localhost:5432`
-- Redis on `localhost:6379`
-- Keycloak on `http://localhost:8080`
-- Fraud service on `http://localhost:8001`
-- API Gateway on `http://localhost:80` (Entry point for all APIs)
-- Orchestrateur on `http://orchestrateur:8000` (Internal)
-- Angular frontend on `http://localhost:4200`
 
-> The fraud service expects the source file at `backend/data/transactions.xlsx`.
-> In Docker, the compose file mounts `./backend/data:/app/data` so the service can read the file as `/app/data/transactions.xlsx`.
+| Service | URL |
+|---------|-----|
+| API Gateway (single entry point) | `http://localhost` |
+| Angular SPA | `http://localhost:4200` |
+| Keycloak admin console | `http://localhost/auth` |
+| Django API (direct) | `http://localhost:8000` |
+| Fraud Service (direct) | `http://localhost:8001` |
+| Mail Service (direct) | `http://localhost:8002` |
+| Text-to-SQL Service (direct) | `http://localhost:8003` |
+| PostgreSQL | `localhost:5432` |
+| Redis | `localhost:6379` |
 
-### 2) Start Ollama (on your host machine)
+### 2. Start Ollama (on your host machine)
 
 ```powershell
 ollama serve
@@ -95,13 +227,15 @@ ollama pull llama3.2
 
 > Ollama runs on your machine. Docker connects to it via `host.docker.internal:11434`.
 
-### 3) Configure Keycloak
+### 3. Configure Keycloak
 
 Follow [docs/keycloak-setup.md](docs/keycloak-setup.md) to configure the realm, client, and test user.
 
-### 4) Login
+Required Keycloak roles: `bank_agent`, `admin`
 
-Open `http://localhost:4200` — redirected to Keycloak.
+### 4. Login
+
+Open `http://localhost:4200` — you will be redirected to Keycloak.
 Login with your test user (e.g. `testuser` / `test1234`).
 
 ---
@@ -114,22 +248,33 @@ Login with your test user (e.g. `testuser` / `test1234`).
 cd backend
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
-pip install --upgrade pip
 pip install -r chatbot/requirements.txt
-```
-
-Create `.env` from template:
-
-```powershell
 cp .env.example .env
 # Edit .env — see Environment Variables section
-```
-
-Run migrations and start:
-
-```powershell
 python manage.py migrate
 python manage.py runserver
+```
+
+### Text-to-SQL Service
+
+```powershell
+cd text-to-sql-service
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+# Set DATABASE_URL, KEYCLOAK_* env vars
+uvicorn main:app --port 8003
+```
+
+### Mail Service
+
+```powershell
+cd mail-service
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+# Set SMTP_*, MAIL_DATABASE_URL env vars
+uvicorn main:app --port 8002
 ```
 
 ### Frontend
@@ -142,74 +287,50 @@ npm start
 
 ---
 
-## Fraud Detection Service & Data
-
-You can test the fraud microservice directly without going through the Django API.
-
-### Direct endpoints
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `http://localhost:8001/analyze` | POST | Direct fraud analysis |
-| `http://localhost:8001/health` | GET | Fraud service health check |
-
-### Transaction file lookup order
-
-The fraud loader checks the transaction file in this order:
-
-1. `FRAUD_DATA_DIR` if it is set
-2. `/app/data/transactions.xlsx` in Docker
-3. `backend/data/transactions.xlsx` in local development
-4. `backend/data/transactions.xls` or `backend/data/transactions.csv` as fallback
-
-### If you get “Transaction file not found”
-
-- Make sure `backend/data/transactions.xlsx` exists
-- Confirm Docker mounts `./backend/data:/app/data`
-- If you store the file elsewhere, set `FRAUD_DATA_DIR` to that directory
-- Restart the `fraud-service` container after moving the file
-
----
-
 ## Project Structure
 
 ```
 bank_chat/
 ├── docker-compose.yml
+├── .env                          # SMTP credentials for mail-service
 ├── docs/
 │   └── keycloak-setup.md
-├── backend/
+├── postgres/                     # Init SQL scripts (create DBs + users)
+├── api-gateway/
+│   ├── Dockerfile
+│   └── nginx.conf                # Routing: /api/, /fraud/, /mail/, /sql/, /auth/
+├── backend/                      # Django orchestrateur
 │   ├── .env.example
+│   ├── Dockerfile
 │   ├── config/
-│   │   ├── settings.py           # Django settings + Redis cache config
+│   │   ├── settings.py
 │   │   ├── urls.py
 │   │   └── wsgi.py
 │   ├── chatbot/
 │   │   ├── auth/
 │   │   │   ├── authentication.py
-│   │   │   └── keycloak_client.py
+│   │   │   ├── permissions.py    # IsAuthenticated, IsBankAgent, IsAdmin
+│   │   │   ├── keycloak_client.py
+│   │   │   ├── views.py          # Role/user CRUD proxied to Keycloak Admin API
+│   │   │   └── urls.py           # /me/, /roles/, /users/ endpoints
 │   │   ├── graph/
 │   │   │   ├── state.py
-│   │   │   ├── nodes.py          # LLM init (Ollama or Groq)
+│   │   │   ├── nodes.py          # Agents: fraud, sql, account, transfer, support, fallback
 │   │   │   └── orchestrator.py
-│   │   ├── management/
-│   │   │   └── commands/
-│   │   │       └── archive_messages.py   # ← archiving command
+│   │   ├── management/commands/
+│   │   │   └── archive_messages.py
 │   │   ├── migrations/
-│   │   │   ├── 0001_initial.py
-│   │   │   └── 0002_conversation_summary.py  # ← adds summary fields
-│   │   ├── memory_manager.py     # ← intelligent memory (Redis + PG)
-│   │   ├── archiving.py          # ← PostgreSQL archiving service
+│   │   ├── memory_manager.py     # Redis + PostgreSQL intelligent memory
+│   │   ├── archiving.py
 │   │   ├── models.py
 │   │   ├── serializers.py
-│   │   ├── views.py
-│   │   ├── urls.py
-│   │   └── requirements.txt
+│   │   ├── views.py              # Chat, ConversationCRUD, FraudAnalyze, UserAdmin
+│   │   └── urls.py
 │   ├── data/
-│   │   ├── transactions.xlsx         # shared dataset for fraud analysis
-│   │   └── reports/
+│   │   ├── transactions.xlsx     # Shared dataset for fraud analysis
+│   │   └── reports/              # Generated Excel fraud reports
 │   └── manage.py
-├── fraud-service/
+├── fraud-service/                # Fraud detection (FastAPI + LangGraph)
 │   ├── Dockerfile
 │   ├── main.py
 │   ├── requirements.txt
@@ -221,26 +342,90 @@ bank_chat/
 │       ├── rules.py
 │       ├── scoring.py
 │       └── state.py
+├── mail-service/                 # SMTP email service (FastAPI)
+│   ├── Dockerfile
+│   ├── main.py                   # /send, /history, /stats, /health
+│   ├── requirements.txt
+│   └── templates/                # Jinja2 HTML email templates
+│       ├── fraud_alert.html
+│       ├── critical_alert.html
+│       ├── client_response.html
+│       └── nightly_report.html
+├── text-to-sql-service/          # NL → SQL service (FastAPI)
+│   ├── Dockerfile
+│   ├── main.py                   # /query, /schema, /examples, /health
+│   ├── requirements.txt
+│   └── sql_agent/
+│       ├── schema.py             # Whitelisted tables + LLM prompt
+│       ├── generator.py          # LLM: NL → SQL
+│       ├── validator.py          # Security checks (SELECT-only, whitelist)
+│       ├── executor.py           # PostgreSQL execution
+│       ├── explainer.py          # Formats results (markdown table + prose)
+│       └── auth.py               # JWT require_bank_agent dependency
 └── frontend/
-    └── src/
-        ├── environments/
-        │   ├── environment.ts
-        │   └── environment.prod.ts
-        └── app/
-            ├── auth/
-            │   ├── keycloak.service.ts
-            │   ├── auth.interceptor.ts
-            │   └── auth.guard.ts
-            ├── services/
-            │   └── chat.service.ts
-            ├── chat/
-            │   ├── chat.component.ts
-            │   ├── chat.component.html
-            │   └── chat.component.css
-            ├── app.ts
-            ├── app.config.ts
-            └── app.routes.ts
+    └── src/app/
+        ├── auth/
+        │   ├── keycloak.service.ts
+        │   ├── auth.interceptor.ts
+        │   └── auth.guard.ts
+        ├── services/
+        │   └── chat.service.ts
+        ├── fraud-settings/       # Fraud settings UI component
+        ├── chat/
+        └── app.ts
 ```
+
+---
+
+## API Endpoints
+
+### Django Orchestrateur (`/api/v1/chatbot/`)
+
+| Method | Endpoint | Auth | Description |
+|--------|----------|------|-------------|
+| `POST` | `chat/` | Any user | Standard (blocking) chat |
+| `POST` | `chat/stream/` | Any user | Streaming SSE chat |
+| `POST` | `fraud/analyze/` | `bank_agent` / `admin` | Direct fraud analysis |
+| `GET` | `conversations/` | Any user | Conversation list |
+| `GET` | `conversations/<session_id>/` | Any user | Conversation detail + messages |
+| `DELETE` | `conversations/<session_id>/` | Any user | Delete + invalidate Redis cache |
+| `GET` | `health/` | Public | Health check |
+| `GET` | `me/` | Any user | Current user info and roles |
+| `GET` | `roles/` | `admin` | List Keycloak realm roles |
+| `POST` | `roles/` | `admin` | Create realm role |
+| `GET/PUT/DELETE` | `roles/<role_name>/` | `admin` | Role detail / update / delete |
+| `GET` | `roles/<role_name>/users/` | `admin` | Users with a specific role |
+| `GET` | `users/` | `admin` | List all Keycloak users |
+| `GET/PUT/DELETE` | `users/<user_id>/` | `admin` | User detail / update / delete |
+| `GET/POST/DELETE` | `users/<user_id>/roles/` | `admin` | Get / assign / remove user roles |
+| `GET` | `admin/users/list/` | `admin` | User list with roles (legacy) |
+| `POST` | `admin/users/update-role/` | `admin` | Update user role (legacy) |
+
+### Text-to-SQL Service (via gateway `/sql/`)
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `POST` | `/sql/query` | `bank_agent` / `admin` | NL → SQL → results |
+| `GET` | `/sql/schema` | `bank_agent` / `admin` | Available schema |
+| `GET` | `/sql/examples` | `bank_agent` / `admin` | Example questions |
+| `GET` | `/sql/health` | Public | Health check |
+
+### Mail Service (via gateway `/mail/`)
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `POST` | `/mail/send` | None (internal) | Send email from template |
+| `GET` | `/mail/history` | None (internal) | Email audit log |
+| `GET` | `/mail/stats` | None (internal) | Dashboard statistics |
+| `GET` | `/mail/health` | Public | Health check |
+
+### Fraud Service (via gateway `/fraud/`)
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `POST` | `/fraud/analyze` | JWT | Full fraud analysis |
+| `GET` | `/fraud/health` | Public | Health check |
+| `GET` | `/fraud/reports/<file>` | Public (URL secret) | Download Excel report |
 
 ---
 
@@ -253,9 +438,9 @@ bank_chat/
 | `DJANGO_SECRET_KEY` | Django secret key | (insecure default) |
 | `DEBUG` | Debug mode | `False` |
 | `ALLOWED_HOSTS` | Allowed hosts | `localhost,127.0.0.1,chatbot` |
-| `DB_NAME` | PostgreSQL database name | `bank_chat` |
-| `DB_USER` | PostgreSQL user | `postgres` |
-| `DB_PASSWORD` | PostgreSQL password | `postgresql` |
+| `DB_NAME` | PostgreSQL database name | `bank_orchestrateur` |
+| `DB_USER` | PostgreSQL user | `orchestrateur_user` |
+| `DB_PASSWORD` | PostgreSQL password | `orchestrateur_password` |
 | `DB_HOST` | PostgreSQL host | `db` |
 | `DB_PORT` | PostgreSQL port | `5432` |
 | `REDIS_URL` | Redis connection URL | `redis://redis:6379/0` |
@@ -264,39 +449,43 @@ bank_chat/
 | `OLLAMA_MODEL` | Ollama model name | `llama3.2` |
 | `GROQ_API_KEY` | Groq API key (if provider=groq) | — |
 | `GROQ_MODEL` | Groq model name | `llama-3.3-70b-versatile` |
-| `FRAUD_SERVICE_URL` | Direct fraud service URL | `http://fraud-service:8001` |
-| `FRAUD_DATA_DIR` | Optional override for the transaction file directory | `/app/data` |
+| `FRAUD_SERVICE_URL` | Fraud service URL | `http://fraud-service:8001` |
+| `FRAUD_DATA_DIR` | Optional override for transaction file directory | `/app/data` |
+| `TEXT2SQL_SERVICE_URL` | Text-to-SQL service URL | `http://text-to-sql-service:8003` |
+| `MAIL_SERVICE_URL` | Mail service URL | `http://mail-service:8002` |
+| `ALERT_EMAIL` | Compliance alert email recipient | `compliance@yourbank.com` |
 | `KEYCLOAK_URL` | Keycloak server URL | `http://keycloak:8080` |
 | `KEYCLOAK_REALM` | Keycloak realm name | `myrealm` |
 | `KEYCLOAK_CLIENT_ID` | Keycloak client ID | `bank_chat` |
+| `KEYCLOAK_ISSUER` | Public issuer URL | `http://localhost/auth` |
 
-### Django `settings.py` — Redis cache (required)
+### Root `.env` (for mail-service SMTP)
 
-Add to `backend/config/settings.py`:
+| Variable | Description |
+|----------|-------------|
+| `SMTP_HOST` | SMTP server host (e.g. `smtp.gmail.com`) |
+| `SMTP_PORT` | SMTP port (default `587`) |
+| `SMTP_USER` | SMTP username / Gmail address |
+| `SMTP_PASSWORD` | SMTP password / App Password |
+| `SMTP_FROM` | From address (defaults to `SMTP_USER`) |
 
-```python
-import os
+### Text-to-SQL Service (set via docker-compose environment)
 
-CACHES = {
-    "default": {
-        "BACKEND": "django_redis.cache.RedisCache",
-        "LOCATION": os.getenv("REDIS_URL", "redis://redis:6379/0"),
-        "OPTIONS": {
-            "CLIENT_CLASS": "django_redis.client.DefaultClient",
-            "IGNORE_EXCEPTIONS": True,  # fallback silently if Redis is down
-        },
-        "KEY_PREFIX": "bankchat",
-        "TIMEOUT": 3600,  # 1 hour — aligned with SESSION_TTL in memory_manager.py
-    }
-}
-```
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `DATABASE_URL` | PostgreSQL URL for `banking_data` | `postgresql://sql_user:sql_password@db:5432/banking_data` |
+| `SQL_MAX_ROWS` | Maximum rows returned per query | `100` |
+| `SQL_TIMEOUT_MS` | Query timeout in milliseconds | `30000` |
+| `KEYCLOAK_URL` | Keycloak URL for JWT validation | `http://keycloak:8080/auth` |
+| `KEYCLOAK_REALM` | Keycloak realm | `myrealm` |
+| `KEYCLOAK_CLIENT_ID` | Keycloak client ID | `bank_chat` |
 
 ### Frontend (`frontend/src/environments/environment.ts`)
 
 | Setting | Description | Default |
 |---------|-------------|---------|
-| `apiBaseUrl` | Backend API URL | `http://localhost:8000/api/v1/chatbot` |
-| `keycloak.url` | Keycloak URL | `http://localhost:8080` |
+| `apiBaseUrl` | Backend API URL | `http://localhost/api/v1/chatbot` |
+| `keycloak.url` | Keycloak URL | `http://localhost/auth` |
 | `keycloak.realm` | Realm name | `myrealm` |
 | `keycloak.clientId` | Client ID | `bank_chat` |
 
@@ -324,56 +513,12 @@ Archiving behavior is controlled in `backend/chatbot/archiving.py`:
 
 ---
 
-## Memory System — How It Works
-
-### Per-message context (real-time)
-
-```
-PostgreSQL (all messages)
-    ↓
-Redis cache check
-    ├── HIT  → use cached summary (~1ms, no LLM call)
-    └── MISS → generate summary via LLM → cache in Redis
-         ↓
-Assemble context within 3,000 token budget:
-    [📋 summary ~200 tokens] + [💬 12 recent messages] + [✉️ new message]
-         ↓
-LLM generates response
-         ↓
-Save new message → PostgreSQL
-```
-
-### Nightly archiving (PostgreSQL size management)
-
-```
-Conversations with > 50 messages
-    ↓
-Generate consolidated LLM summary of old messages
-    ↓
-Save summary → Conversation.summary column
-    ↓
-Delete old messages (keep last 12)
-    ↓
-Result: ~94% size reduction per conversation
-```
-
-### Storage summary
-
-| Data | Where | Lifetime |
-|------|-------|---------|
-| All messages (raw) | PostgreSQL `chatbot_message` | Permanent until archiving |
-| Archived summary | PostgreSQL `chatbot_conversation.summary` | Permanent |
-| Session summary cache | Redis `bankchat:mem:{session}:summary` | 1 hour TTL |
-| Recent messages cache | Redis `bankchat:mem:{session}:recent` | 1 hour TTL |
-
----
-
 ## Scripts
 
 ### Backend
 
 ```powershell
-# Apply migrations (includes memory system migration)
+# Apply migrations
 python manage.py migrate
 
 # Test archiving without modifying database
@@ -403,57 +548,45 @@ npm test         # Unit tests
 # Start all services
 docker compose up -d --build
 
-# View backend logs
-docker logs bank_chat_backend -f
-
-# View fraud service logs
+# View logs for a specific service
+docker logs bank_chat_orchestrateur -f
 docker logs bank_chat_fraud -f
+docker logs bank_chat_text2sql -f
+docker logs bank_chat_mail -f
 
 # View Redis cache keys
 docker exec -it bank_chat_redis redis-cli KEYS "bankchat*"
 
 # Check PostgreSQL conversation summaries
-docker exec -it bank_chat_db psql -U postgres -d bank_chat -c \
+docker exec -it bank_chat_db psql -U postgres -d bank_orchestrateur -c \
   "SELECT session_id, LEFT(summary,80), archived_count FROM chatbot_conversation;"
 
-# Manual archiving inside Docker
-docker exec bank_chat_backend python manage.py archive_messages
+# Check email audit log
+docker exec -it bank_chat_db psql -U postgres -d mail_db -c \
+  "SELECT sent_at, recipient, template_type, status, risk_level FROM sent_emails ORDER BY sent_at DESC LIMIT 10;"
 
-# Rebuild only the fraud service after changing loader or rules
+# Manual archiving inside Docker
+docker exec bank_chat_orchestrateur python manage.py archive_messages
+
+# Rebuild a specific service after code change
 docker compose up -d --build fraud-service
+docker compose up -d --build text-to-sql-service
+docker compose up -d --build mail-service
 ```
 
 ---
 
-## API Endpoints
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/v1/chatbot/chat/` | POST | Standard chat |
-| `/api/v1/chatbot/chat/stream/` | POST | Streaming SSE chat |
-| `/api/v1/chatbot/fraud/analyze/` | POST | Fraud detection |
-| `/api/v1/chatbot/conversations/?user_id=X` | GET | Conversation list |
-| `/api/v1/chatbot/conversations/<session_id>/` | GET | Conversation detail |
-| `/api/v1/chatbot/conversations/<session_id>/` | DELETE | Delete + invalidate Redis cache |
-| `/api/v1/chatbot/health/` | GET | Health check |
-
-### Direct fraud-service endpoints
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `http://localhost:8001/analyze` | POST | Direct fraud analysis |
-| `http://localhost:8001/health` | GET | Service health check |
-
----
-
-## Running All Services (local dev — 3 terminals)
+## Running All Services (local dev — multiple terminals)
 
 | Terminal | Command | Service |
 |----------|---------|---------|
-| 1 | `ollama serve` | Ollama LLM (http://localhost:11434) |
-| 2 | `docker compose up -d` | PG + Redis + Keycloak |
-| 3 | `cd backend && python manage.py runserver` | Django API (http://localhost:8000) |
-| 4 | `cd frontend && npm start` | Angular (http://localhost:4200) |
+| 1 | `ollama serve` | Ollama LLM |
+| 2 | `docker compose up -d db redis keycloak` | PG + Redis + Keycloak |
+| 3 | `cd backend && python manage.py runserver` | Django API (:8000) |
+| 4 | `cd fraud-service && uvicorn main:app --port 8001` | Fraud Service (:8001) |
+| 5 | `cd mail-service && uvicorn main:app --port 8002` | Mail Service (:8002) |
+| 6 | `cd text-to-sql-service && uvicorn main:app --port 8003` | Text-to-SQL (:8003) |
+| 7 | `cd frontend && npm start` | Angular (:4200) |
 
 ---
 
@@ -461,6 +594,10 @@ docker compose up -d --build fraud-service
 
 | Problem | Cause | Fix |
 |---------|-------|-----|
-| `Transaction file not found` in fraud analysis | `backend/data/transactions.xlsx` is missing or not mounted | Make sure the file exists and the `fraud-service` volume points to it |
-| Fraud analysis returns no transactions for an IBAN | The IBAN does not exist in the spreadsheet | Check the IBAN format and the contents of `transactions.xlsx` |
-| `403 Forbidden` on authenticated requests | Token audience mismatch | Add or verify the Keycloak audience mapper for `bank_chat` |
+| `Transaction file not found` | `backend/data/transactions.xlsx` missing or not mounted | Make sure the file exists; check the `fraud-service` volume |
+| Fraud analysis returns no transactions | IBAN not in the spreadsheet | Check the IBAN format and contents of `transactions.xlsx` |
+| `403 Forbidden` on authenticated requests | Token audience mismatch | Add/verify the Keycloak audience mapper for `bank_chat` |
+| `403` on fraud or SQL agent | User lacks `bank_agent` or `admin` role | Assign the role in Keycloak or via `/api/v1/chatbot/users/<id>/roles/` |
+| Mail not sent | Wrong SMTP credentials | Check `SMTP_USER` / `SMTP_PASSWORD` (use a Gmail App Password) |
+| Text-to-SQL returns validation error | Query touches a blocked table or uses DML | The service is read-only; rephrase as a SELECT question |
+| `503 Service Unavailable` from Keycloak admin | Admin service token missing | Check `KEYCLOAK_CLIENT_SECRET` in backend `.env` |
