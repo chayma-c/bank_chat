@@ -141,13 +141,15 @@ def _eval_suspicious_iban(df: pd.DataFrame, rule: FraudRuleModel) -> dict:
         None,
     )
 
-    # Self-transfer detection
+    # Self-transfer detection: same IBAN on both sides of the SAME row
     if client_col and counterparty_col:
-        client_ibans       = set(df[client_col].astype(str).str.upper().dropna())
-        counterparty_ibans = set(df[counterparty_col].astype(str).str.upper().dropna())
-        overlap = client_ibans & counterparty_ibans - {"NAN", "NONE", ""}
-        if overlap:
-            triggered_parts.append(f"Self-transfer detected ({len(overlap)} IBAN(s))")
+        valid_rows = df[[client_col, counterparty_col]].notna().all(axis=1)
+        client_up  = df[client_col].astype(str).str.upper()
+        counter_up = df[counterparty_col].astype(str).str.upper()
+        self_mask  = valid_rows & (client_up == counter_up) & ~client_up.isin({"NAN", "NONE", ""})
+        self_count = int(self_mask.sum())
+        if self_count > 0:
+            triggered_parts.append(f"Self-transfer detected ({self_count} transaction(s))")
 
     # OFAC country prefix check on counterparty IBANs
     if counterparty_col:
@@ -261,13 +263,21 @@ def _eval_foreign_ip(df: pd.DataFrame, rule: FraudRuleModel) -> dict:
         if ofac_geo.any():
             triggered_parts.append(f"OFAC-sanctioned country in geo_location ({int(ofac_geo.sum())} tx)")
 
-        # Detect country mismatch (multiple distinct countries in same account session)
-        # Simple heuristic: if more than 1 unique country code appears
-        country_codes = geo_vals.str.extract(r"\b([A-Z]{2})\b", expand=False).dropna().unique()
-        if len(country_codes) > 1:
-            triggered_parts.append(
-                f"Multiple countries detected in geo_location: {list(country_codes[:5])}"
+        # Detect country mismatch: use the pre-parsed 'country' column from loader.py
+        # (avoids false positives from extracting 2-letter substrings of city names)
+        country_col = "country" if "country" in df.columns else None
+        if country_col:
+            unique_countries = (
+                df[country_col].dropna().astype(str)
+                .str.strip().str.title()
+                .replace("", pd.NA).dropna().unique()
             )
+            unique_countries = [c for c in unique_countries if c.lower() not in ("nan", "none", "")]
+            if len(unique_countries) > 2:
+                triggered_parts.append(
+                    f"Transactions from {len(unique_countries)} different countries: "
+                    f"{unique_countries[:5]}"
+                )
 
     # ── IP address fallback ───────────────────────────────────────────────────
     if "ip_address" in df.columns:

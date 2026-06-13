@@ -140,7 +140,7 @@ def load_data(state: FraudAgentState) -> dict:
     try:
         window_days = get_rolling_window_days()
 
-        df = load_transactions(db=db, iban=iban, window_days=None)
+        df = load_transactions(db=db, iban=iban, window_days=window_days)
 
         if df.empty:
             logger.warning(f"[load_data] No rows in DB for {iban}, falling back to CSV.")
