@@ -38,7 +38,7 @@ def list_rules(
 # ── GET /rules/{id} ───────────────────────────────────────────────────────────
 @router.get("/{rule_id}", response_model=FraudRuleResponse)
 def get_rule(
-    rule_id: Annotated[str, Path(pattern=r"^RL-[A-Z]{1,3}-[A-Z0-9]{6}$")],
+    rule_id: Annotated[str, Path(pattern=r"^RL-[A-Z]{1,3}-[A-Z0-9]{3,6}$")],
     db: Session = Depends(get_db),
     _: dict = Depends(require_bank_agent),
 ):
@@ -75,7 +75,7 @@ def create_rule(
 # ── PUT /rules/{id} ───────────────────────────────────────────────────────────
 @router.put("/{rule_id}", response_model=FraudRuleResponse)
 def update_rule(
-    rule_id: Annotated[str, Path(pattern=r"^RL-[A-Z]{1,3}-[A-Z0-9]{6}$")],
+    rule_id: Annotated[str, Path(pattern=r"^RL-[A-Z]{1,3}-[A-Z0-9]{3,6}$")],
     data: FraudRuleUpdate,
     db: Session = Depends(get_db),
     current_user: dict = Depends(require_admin),
@@ -110,7 +110,7 @@ def update_rule(
 # ── PATCH /rules/{id} ─────────────────────────────────────────────────────────
 @router.patch("/{rule_id}", response_model=FraudRuleResponse)
 def patch_rule(
-    rule_id: Annotated[str, Path(pattern=r"^RL-[A-Z]{1,3}-[A-Z0-9]{6}$")],
+    rule_id: Annotated[str, Path(pattern=r"^RL-[A-Z]{1,3}-[A-Z0-9]{3,6}$")],
     data: FraudRulePatch,
     db: Session = Depends(get_db),
     current_user: dict = Depends(require_admin),
@@ -127,7 +127,7 @@ def patch_rule(
 # ── DELETE /rules/{id} ────────────────────────────────────────────────────────
 @router.delete("/{rule_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_rule(
-    rule_id: Annotated[str, Path(pattern=r"^RL-[A-Z]{1,3}-[A-Z0-9]{6}$")],
+    rule_id: Annotated[str, Path(pattern=r"^RL-[A-Z]{1,3}-[A-Z0-9]{3,6}$")],
     db: Session = Depends(get_db),
     current_user: dict = Depends(require_admin),
 ):

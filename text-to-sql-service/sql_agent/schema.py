@@ -23,9 +23,8 @@ ALLOWED_COLUMNS: dict[str, list[str]] = {
         "merchant_name", "merchant_category", "created_at", "updated_at",
         # Fraud-engine columns (CSV-seeded rows 61+)
         "transaction_amount", "client_iban", "counterparty_iban",
-        "timestamp", "transaction_category", "geo_location",
-        "ip_address", "device_type", "merchant_mcc",
-        "account_currentbalance", "country",
+        "timestamp", "geo_location", "ip_address", "merchant_mcc",
+        "account_current_balance", "ingested_at",
     ],
     "fraud_rules": [
         "id", "name", "domain", "trigger", "trigger_detail",
@@ -50,11 +49,22 @@ ALLOWED_COLUMNS: dict[str, list[str]] = {
 SCHEMA_DESCRIPTION = """
 You have READ-ONLY access to the following PostgreSQL tables in the 'banking_data' database.
 
-IMPORTANT: The 'transactions' table has two sets of rows:
-  - Legacy rows (id 1-60): use columns amount, user_id, merchant_name, status, fraud_score
-  - Fraud rows (id 61+):   use columns transaction_amount, client_iban, counterparty_iban, timestamp
-  Always use COALESCE(transaction_amount, amount) when querying amounts to cover both row types.
-  Use IS NOT NULL filters on client_iban to target only fraud rows.
+CRITICAL SQL RULES — FOLLOW EXACTLY:
+
+RULE 1 — AMOUNTS: Always write COALESCE(transaction_amount, amount) AS amount.
+  Never use 'amount' or 'transaction_amount' alone — always COALESCE both.
+
+RULE 2 — IBAN LOOKUP: To find all transactions for an IBAN write:
+  WHERE client_iban = '<IBAN>' OR counterparty_iban = '<IBAN>'
+  NEVER use AND, NEVER use COALESCE for IBANs.
+
+RULE 3 — DATES: Use COALESCE(timestamp, created_at) AS date to cover both row types.
+
+RULE 4 — COUNTRY: There is NO 'country' column. SELECT geo_location to show location.
+  Do NOT add any geo_location filter unless the user explicitly asks to filter by country.
+
+RULE 5 — EXACT COLUMN NAMES: account_current_balance (not account_currentbalance),
+  transaction_type (not transaction_category). No 'country', 'device_type' columns exist.
 
 ══════════════════════════════════════════════════════════
 TABLE: transactions
@@ -62,31 +72,29 @@ Description: Bank transactions — legacy + CSV-seeded fraud data
 ══════════════════════════════════════════════════════════
 Columns:
   -- Legacy columns (rows 1-60, client_iban IS NULL) --
-  - id                    SERIAL          Primary key
-  - transaction_id        VARCHAR(255)    Unique transaction identifier
-  - user_id               VARCHAR(255)    User/client identifier
-  - amount                DECIMAL(15,2)   Transaction amount in EUR (legacy rows)
-  - currency              VARCHAR(3)      Currency code (default: EUR)
-  - transaction_type      VARCHAR(50)     Type: transfer, payment, withdrawal, deposit
-  - status                VARCHAR(20)     Status: pending, completed, failed, blocked
-  - fraud_score           DECIMAL(5,4)    ML fraud score 0-1 (higher = more suspicious)
-  - is_fraudulent         BOOLEAN         Whether flagged as fraudulent
-  - merchant_name         VARCHAR(255)    Merchant or counterparty name
-  - merchant_category     VARCHAR(100)    Merchant category (e.g. gambling, luxury, crypto)
-  - created_at            TIMESTAMP       Transaction creation date/time
-  - updated_at            TIMESTAMP       Last update date/time
+  - id                     SERIAL          Primary key
+  - transaction_id         VARCHAR(255)    Unique transaction identifier
+  - user_id                VARCHAR(255)    User/client identifier
+  - amount                 DECIMAL(15,2)   Transaction amount in EUR (legacy rows only)
+  - currency               VARCHAR(3)      Currency code (default: EUR)
+  - transaction_type       VARCHAR(50)     Type: INTERNAL_TRANSFER, WIRE_TRANSFER, SEPA, SWIFT, ACH, CARD_PAYMENT, BILL_PAYMENT
+  - status                 VARCHAR(20)     Status: pending, completed, failed, blocked
+  - fraud_score            DECIMAL(5,4)    ML fraud score 0-1
+  - is_fraudulent          BOOLEAN         Whether flagged as fraudulent
+  - merchant_name          VARCHAR(255)    Merchant or counterparty name (legacy rows)
+  - merchant_category      VARCHAR(100)    Merchant category (legacy rows)
+  - created_at             TIMESTAMPTZ     Transaction creation date (legacy rows)
+  - updated_at             TIMESTAMPTZ     Last update date
   -- Fraud-engine columns (rows 61+, client_iban IS NOT NULL) --
-  - transaction_amount    DECIMAL(15,2)   Transaction amount in EUR (fraud rows)
-  - client_iban           VARCHAR(64)     Source IBAN of the client
-  - counterparty_iban     VARCHAR(64)     Destination/counterparty IBAN
-  - timestamp             TIMESTAMPTZ     Transaction timestamp (fraud rows)
-  - transaction_category  VARCHAR(100)    Category: wire_transfer, cash_withdrawal, etc.
-  - geo_location          TEXT            Geographic location string (City, Country lat,lon)
-  - country               VARCHAR(100)    Country extracted from geo_location
-  - ip_address            VARCHAR(45)     IP address used for the transaction
-  - device_type           VARCHAR(50)     Device type: mobile, desktop, ATM
-  - merchant_mcc          INTEGER         Merchant Category Code
-  - account_currentbalance DECIMAL(15,2)  Account balance at transaction time
+  - transaction_amount     DECIMAL(15,2)   Transaction amount in EUR (fraud rows only)
+  - client_iban            VARCHAR(64)     Source IBAN (fraud rows only)
+  - counterparty_iban      VARCHAR(64)     Destination IBAN (fraud rows only)
+  - timestamp              TIMESTAMPTZ     Transaction timestamp (fraud rows only)
+  - geo_location           TEXT            Location string e.g. "Frankfurt, Germany (50.11, 8.68)"
+  - ip_address             VARCHAR(45)     IP address (fraud rows only)
+  - merchant_mcc           INTEGER         Merchant Category Code
+  - account_current_balance DECIMAL(15,2)  Account balance at transaction time (fraud rows only)
+  - ingested_at            TIMESTAMPTZ     When row was seeded into DB
 
 ══════════════════════════════════════════════════════════
 TABLE: fraud_rules
@@ -159,20 +167,18 @@ def get_schema_dict() -> dict:
                     {"name": "counterparty_iban", "type": "VARCHAR", "description": "Destination IBAN (fraud rows only)"},
                     {"name": "currency", "type": "VARCHAR", "description": "Currency code (default EUR)"},
                     {"name": "transaction_type", "type": "VARCHAR", "description": "Type: transfer, payment, withdrawal, deposit"},
-                    {"name": "transaction_category", "type": "VARCHAR", "description": "Category: wire_transfer, cash_withdrawal, etc. (fraud rows)"},
                     {"name": "status", "type": "VARCHAR", "description": "Status: pending, completed, failed, blocked"},
                     {"name": "fraud_score", "type": "DECIMAL", "description": "ML fraud score 0-1"},
                     {"name": "is_fraudulent", "type": "BOOLEAN", "description": "Whether flagged as fraudulent"},
                     {"name": "merchant_name", "type": "VARCHAR", "description": "Merchant or counterparty name (legacy rows)"},
                     {"name": "merchant_category", "type": "VARCHAR", "description": "Merchant category (legacy rows)"},
-                    {"name": "geo_location", "type": "TEXT", "description": "Geographic location string (fraud rows)"},
-                    {"name": "country", "type": "VARCHAR", "description": "Country extracted from geo_location"},
+                    {"name": "geo_location", "type": "TEXT", "description": "Location string e.g. 'Frankfurt, Germany (50.11, 8.68)' — use LIKE '%Germany%' to filter by country"},
                     {"name": "ip_address", "type": "VARCHAR", "description": "IP address (fraud rows)"},
-                    {"name": "device_type", "type": "VARCHAR", "description": "Device type: mobile, desktop, ATM"},
                     {"name": "merchant_mcc", "type": "INTEGER", "description": "Merchant Category Code"},
-                    {"name": "account_currentbalance", "type": "DECIMAL", "description": "Account balance at transaction time"},
+                    {"name": "account_current_balance", "type": "DECIMAL", "description": "Account balance at transaction time (fraud rows)"},
                     {"name": "timestamp", "type": "TIMESTAMPTZ", "description": "Transaction timestamp (fraud rows)"},
-                    {"name": "created_at", "type": "TIMESTAMP", "description": "Transaction creation date (legacy rows)"},
+                    {"name": "created_at", "type": "TIMESTAMPTZ", "description": "Transaction creation date (legacy rows)"},
+                    {"name": "ingested_at", "type": "TIMESTAMPTZ", "description": "When row was seeded"},
                 ],
             },
             "fraud_rules": {

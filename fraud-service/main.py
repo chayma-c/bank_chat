@@ -180,7 +180,10 @@ async def analyze(
         return {"error": "IBAN requis.", "llm_summary": "❌ IBAN non fourni."}
  
     messages = [HumanMessage(content=user_content)]
-    result   = run_fraud_agent(
+    # run_fraud_agent is sync (LangGraph .invoke) — run in thread to avoid
+    # event-loop conflicts with FastAPI's async loop.
+    result = await asyncio.to_thread(
+        run_fraud_agent,
         messages=messages,
         user_id=req.user_id,
         session_id=req.session_id,
