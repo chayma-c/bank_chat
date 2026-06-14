@@ -413,7 +413,138 @@ async def _run_agent(state: BankChatState, agent_key: str) -> BankChatState:
 
 async def account_agent(state: BankChatState):   return await _run_agent(state, "account_agent")
 async def transfer_agent(state: BankChatState):  return await _run_agent(state, "transfer_agent")
-async def support_agent(state: BankChatState):   return await _run_agent(state, "support_agent")
+
+async def support_agent(state: BankChatState) -> BankChatState:
+    """
+    KB-aware support agent with knowledge boundary enforcement.
+    
+    Pipeline:
+    1. Load VirtuBank knowledge base
+    2. Check if query is in scope (reject account-specific, out-of-scope)
+    3. Extract keywords from user message
+    4. Match relevant FAQ entries using fuzzy matching
+    5. Build knowledge context from matches
+    6. Call LLM with KB context + constraint system prompt
+    7. Return response with metadata
+    """
+    try:
+        from ..support_knowledge import (
+            load_knowledge_base,
+            extract_keywords,
+            check_scope,
+            match_faq_entry,
+            build_context,
+            handle_no_match
+        )
+    except ImportError:
+        logger.error("[support_agent] support_knowledge module not found. Falling back to generic agent.")
+        return await _run_agent(state, "support_agent")
+    
+    messages = state["messages"]
+    last_msg = messages[-1].content if messages else ""
+    
+    try:
+        # Step 1: Load knowledge base
+        kb = load_knowledge_base()
+        logger.info(f"[support_agent] KB loaded: {len(kb.get('faq', []))} FAQ entries")
+        
+        # Step 2: Scope validation (reject account-specific and out-of-scope queries)
+        is_valid, rejection_msg = check_scope(last_msg)
+        if not is_valid:
+            logger.warning(f"[support_agent] Query rejected (out of scope): {last_msg[:60]}")
+            return {
+                **state,
+                "messages": [AIMessage(content=rejection_msg)],
+                "agent": "support_agent",
+                "context": {
+                    "type": "scope_rejection",
+                    "query": last_msg[:100]
+                }
+            }
+        
+        # Step 3: Extract keywords
+        keywords = extract_keywords(last_msg)
+        if not keywords:
+            logger.warning(f"[support_agent] No keywords extracted from: {last_msg[:60]}")
+            fallback = handle_no_match("no_match")
+            return {
+                **state,
+                "messages": [AIMessage(content=fallback)],
+                "agent": "support_agent",
+                "context": {
+                    "type": "no_keywords",
+                    "query": last_msg[:100]
+                }
+            }
+        
+        logger.info(f"[support_agent] Keywords extracted: {keywords}")
+        
+        # Step 4: Match FAQ entries using fuzzy matching
+        matches = match_faq_entry(last_msg, max_results=3)
+        logger.info(f"[support_agent] FAQ matches found: {len(matches)}")
+        
+        if not matches:
+            logger.warning(f"[support_agent] No FAQ matches for: {last_msg[:60]}")
+            fallback = handle_no_match("no_match")
+            return {
+                **state,
+                "messages": [AIMessage(content=fallback)],
+                "agent": "support_agent",
+                "context": {
+                    "type": "no_match",
+                    "query": last_msg[:100],
+                    "keywords": keywords
+                }
+            }
+        
+        # Step 5: Build knowledge context from matches
+        kb_context = build_context(matches, kb["bank_identity"])
+        
+        # Step 6: Call LLM with KB context embedded in system prompt
+        system_prompt = (
+            SYSTEM_PROMPTS.get("support_agent", "You are BankChat support.") +
+            "\n\n" +
+            kb_context
+        )
+        system = SystemMessage(content=system_prompt)
+        
+        # Call LLM
+        resp = await llm.ainvoke([system] + list(messages))
+        
+        logger.info(f"[support_agent] Response generated. Matches used: {len(matches)}")
+        
+        # Step 7: Return response with context metadata
+        return {
+            **state,
+            "messages": [AIMessage(content=resp.content)],
+            "agent": "support_agent",
+            "context": {
+                "type": "knowledge_based",
+                "query": last_msg[:100],
+                "keywords": keywords,
+                "matches_used": len(matches),
+                "faq_ids": [m["id"] for m in matches]
+            }
+        }
+    
+    except FileNotFoundError as e:
+        logger.error(f"[support_agent] Knowledge base file not found: {e}")
+        return {
+            **state,
+            "messages": [AIMessage(content="❌ Support knowledge base unavailable. Please contact: support@virtubank.example")],
+            "agent": "support_agent",
+            "context": {"type": "error", "error": "kb_not_found"}
+        }
+    
+    except Exception as e:
+        logger.exception(f"[support_agent] Unexpected error: {e}")
+        return {
+            **state,
+            "messages": [AIMessage(content=f"❌ An error occurred. Please contact support: +33 (0) 800 123 456")],
+            "agent": "support_agent",
+            "context": {"type": "error", "error": str(e)[:100]}
+        }
+
 async def handle_fallback(state: BankChatState): return await _run_agent(state, "fallback")
 
 async def search_agent(state: BankChatState) -> BankChatState:

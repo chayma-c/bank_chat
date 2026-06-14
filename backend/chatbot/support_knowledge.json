@@ -1,0 +1,314 @@
+{
+  "meta": {
+    "version": "1.0",
+    "last_updated": "2026-06-12",
+    "retrieval_method": "keyword_matching_with_fuzzy_scoring",
+    "knowledge_base_version": "VirtuBank Q2 2026"
+  },
+  "bank_identity": {
+    "name": "VirtuBank",
+    "tagline": "Modern Banking, Simplified",
+    "founded": 2020,
+    "headquarters": "Paris, France",
+    "support_email": "support@virtubank.example",
+    "support_phone": "+33 (0) 800 123 456",
+    "support_hours": "Monday to Friday, 08:00 - 18:00 CET",
+    "website": "www.virtubank.example",
+    "mobile_app": "Available on iOS and Android",
+    "app_stores": {
+      "ios": "VirtuBank on App Store",
+      "android": "VirtuBank on Google Play"
+    },
+    "company_mission": "VirtuBank provides accessible, secure, and transparent digital banking solutions for individuals and businesses.",
+    "regulatory_info": "Regulated by the European Central Bank (ECB) and the French Prudential Regulatory Authority (ACPR)"
+  },
+  "products": [
+    {
+      "id": "checking_account",
+      "name": "VirtuBank Checking Account",
+      "description": "A free, feature-rich everyday checking account with no minimum balance requirement",
+      "features": [
+        "Zero monthly fees",
+        "Unlimited transactions",
+        "IBAN for domestic and international transfers",
+        "Mobile app access",
+        "Real-time notifications"
+      ],
+      "account_opening_requirements": [
+        "Age 18 or older",
+        "Valid government-issued ID (passport, driver's license, national ID)",
+        "Proof of residence (utility bill, bank statement, rental agreement)",
+        "Personal email and phone number"
+      ],
+      "account_closure_process": "Available 24/7 via mobile app (Settings → Account → Close Account) or email support@virtubank.example. Account closes within 5 business days. Any remaining balance is transferred to your linked external account.",
+      "typical_processing_time": "5-10 minutes"
+    },
+    {
+      "id": "savings_account",
+      "name": "VirtuBank Savings Account",
+      "description": "Goal-oriented savings account with competitive interest rates and automated saving tools",
+      "features": [
+        "Annual interest rate: 2.5% APY (compounded monthly)",
+        "No withdrawal penalties",
+        "Automated savings rules (round-ups, scheduled transfers)",
+        "Sub-account creation for goal tracking",
+        "Mobile app integration"
+      ],
+      "account_opening_requirements": [
+        "Must have an active VirtuBank Checking Account",
+        "Age 18 or older",
+        "Valid government-issued ID",
+        "Initial deposit minimum: €100"
+      ],
+      "interest_calculation": "Interest is calculated daily on your balance and credited monthly to your account on the first day of each month."
+    },
+    {
+      "id": "debit_card",
+      "name": "VirtuBank Debit Card",
+      "description": "Secure, contactless debit card with fraud protection and real-time notifications",
+      "features": [
+        "Contactless payments",
+        "EMV chip for security",
+        "Real-time transaction alerts",
+        "No annual fee",
+        "Replaces lost/damaged card within 3-5 business days"
+      ],
+      "daily_limit": "€2,500 cash withdrawal limit per day",
+      "monthly_limit": "€50,000 total spending limit per month",
+      "fraud_protection": "24/7 fraud monitoring. Unauthorized transactions are typically reversed within 10 business days of reporting.",
+      "card_replacement_fee": "Free for the first replacement; €15 for each subsequent replacement"
+    },
+    {
+      "id": "business_account",
+      "name": "VirtuBank Business Account",
+      "description": "Designed for entrepreneurs and small businesses with advanced features and priority support",
+      "features": [
+        "Business-specific transaction categorization",
+        "Batch payment processing",
+        "Multi-user account access",
+        "Business-focused reporting",
+        "Priority customer support"
+      ],
+      "account_opening_requirements": [
+        "Valid business registration (SIRET in France)",
+        "Business tax ID",
+        "Articles of association (if applicable)",
+        "Personal ID of the account holder"
+      ],
+      "transaction_limits": {
+        "daily_transfer_limit": "€50,000",
+        "monthly_transfer_limit": "€500,000"
+      }
+    },
+    {
+      "id": "fixed_deposit",
+      "name": "VirtuBank Fixed Deposit",
+      "description": "Time-locked savings with guaranteed interest rates for long-term financial goals",
+      "features": [
+        "Fixed interest rates for 3, 6, 12, or 24-month terms",
+        "Interest rates: 3% (3-month), 3.5% (6-month), 4% (12-month), 4.5% (24-month)",
+        "No early withdrawal penalties (interest adjusted proportionally)",
+        "Automatic renewal option",
+        "FDIC-equivalent protection up to €100,000"
+      ],
+      "minimum_deposit": "€1,000",
+      "maximum_deposit": "€500,000 per term"
+    },
+    {
+      "id": "credit_building",
+      "name": "VirtuBank Credit Builder",
+      "description": "Secured credit card to build or rebuild credit history with responsible use",
+      "features": [
+        "Requires €500-€2,500 security deposit",
+        "Credit line equals security deposit",
+        "Graduated interest rate: 8.9% APR (improves with on-time payments)",
+        "Annual fee: €25 (waived first year)",
+        "Reports to credit bureaus"
+      ],
+      "eligibility": "Age 18 or older with any VirtuBank checking account"
+    },
+    {
+      "id": "personal_loan",
+      "name": "VirtuBank Personal Loan",
+      "description": "Fast, transparent personal loans for life's expenses",
+      "features": [
+        "Loan amounts: €1,000 - €50,000",
+        "Flexible repayment terms: 6, 12, 24, 36, or 60 months",
+        "Competitive interest rates starting at 4.99% APR",
+        "No prepayment penalties",
+        "Fast approval (same day for eligible applicants)"
+      ],
+      "application_requirements": [
+        "Active VirtuBank Checking Account for at least 3 months",
+        "Minimum annual income: €18,000",
+        "Debt-to-income ratio below 50%",
+        "No recent bankruptcies (within 7 years)"
+      ]
+    }
+  ],
+  "faq": [
+    {
+      "id": "faq_lost_card",
+      "category": "Card Management",
+      "keywords": ["lost", "stolen", "missing", "card", "debit"],
+      "question": "What should I do if my card is lost or stolen?",
+      "answer": "Immediately report a lost or stolen card to VirtuBank by:\n\n1. **Via Mobile App:** Settings → Cards → Report Lost/Stolen (instant block)\n2. **Phone:** +33 (0) 800 123 456 (available 24/7)\n3. **Email:** support@virtubank.example\n\nYour card is blocked instantly. A replacement card will be sent to your registered address within 3-5 business days. You can request expedited shipping for €10 (1-2 business days).\n\n**IMPORTANT:** Review your recent transactions for unauthorized charges. Any fraudulent transactions can be disputed within 60 days of the statement date.",
+      "scope": "in_scope",
+      "account_specific": false
+    },
+    {
+      "id": "faq_password_reset",
+      "category": "Account Security",
+      "keywords": ["password", "reset", "forgot", "change", "security", "pin"],
+      "question": "How do I reset my password or change my security settings?",
+      "answer": "You can reset your password anytime:\n\n**Mobile App:**\n1. On the login screen, tap 'Forgot Password?'\n2. Enter your registered email\n3. Check your email for the reset link (valid for 24 hours)\n4. Create a new password (minimum 12 characters, must include uppercase, lowercase, number, and special character)\n\n**Web Portal:**\n1. Visit www.virtubank.example/login\n2. Click 'Need help?'\n3. Follow the email verification process\n\n**Security Best Practices:**\n- Change your password every 90 days\n- Never share your password with anyone, including VirtuBank staff\n- Use a unique password not used on other websites\n- Enable two-factor authentication (2FA) for additional security",
+      "scope": "in_scope",
+      "account_specific": false
+    },
+    {
+      "id": "faq_transfer_limits",
+      "category": "Transfers & Payments",
+      "keywords": ["limit", "transfer", "maximum", "daily", "monthly", "send"],
+      "question": "What are the daily and monthly transfer limits?",
+      "answer": "VirtuBank transfer limits depend on your account type:\n\n**VirtuBank Checking Account:**\n- Daily transfer limit: €5,000\n- Monthly transfer limit: €100,000\n\n**VirtuBank Business Account:**\n- Daily transfer limit: €50,000\n- Monthly transfer limit: €500,000\n\n**International Transfers (SWIFT):**\n- Daily limit: €10,000\n- Monthly limit: €100,000\n\nLimits reset at midnight CET. You can request temporary increases for specific transfers by contacting support@virtubank.example at least 48 hours in advance.\n\n**Note:** New accounts start with 50% of standard limits for the first 30 days as a security measure.",
+      "scope": "in_scope",
+      "account_specific": false
+    },
+    {
+      "id": "faq_card_declined",
+      "category": "Card Payments",
+      "keywords": ["declined", "rejected", "blocked", "payment", "card", "transaction", "why"],
+      "question": "Why was my card payment declined?",
+      "answer": "Your card payment can be declined for several reasons:\n\n**Common Causes:**\n1. **Insufficient funds** - Check your account balance\n2. **Exceeded daily limit** - VirtuBank has a €2,500/day limit\n3. **Exceeds monthly limit** - €50,000/month total spending\n4. **Incorrect card information** - Double-check card number, expiry, CVV\n5. **Merchant not accepting your card type** - Some merchants only accept Visa/Mastercard\n6. **Fraud detection triggered** - Your card was temporarily blocked for suspicious activity\n7. **Card not activated** - New cards must be activated in the mobile app first\n\n**What to Do:**\n- Check your VirtuBank account for recent transactions\n- Verify the merchant's payment system accepts your card type\n- Try a different payment method\n- Contact support if the issue persists: +33 (0) 800 123 456\n\n**If Fraud is Suspected:**\nYour card may be temporarily blocked. Check your mobile app for security alerts and follow the steps to verify yourself.",
+      "scope": "in_scope",
+      "account_specific": false
+    },
+    {
+      "id": "faq_mobile_app_issues",
+      "category": "Technology & Support",
+      "keywords": ["app", "mobile", "crash", "error", "bug", "technical", "problem"],
+      "question": "I'm having trouble with the VirtuBank mobile app. How do I fix it?",
+      "answer": "Follow these troubleshooting steps:\n\n**Before Reinstalling:**\n1. **Force close and restart:** Close the app completely, wait 10 seconds, reopen\n2. **Update the app:** Go to your app store and install any pending updates\n3. **Clear cache:** Settings → Apps → VirtuBank → Clear Cache (doesn't delete your data)\n4. **Check internet:** Ensure you have a stable WiFi or mobile connection\n5. **Restart your phone:** Power off, wait 30 seconds, power on\n\n**If Issues Persist:**\n1. **Uninstall and reinstall:** Delete the VirtuBank app, restart your phone, reinstall from your app store\n2. **Log out and log back in:** Settings → Account → Sign Out, then log back in\n\n**Reporting a Bug:**\nIf you continue experiencing issues, document the problem and contact:\n- **Email:** support@virtubank.example\n- **Phone:** +33 (0) 800 123 456\n- **In-app:** Help → Report a Problem\n\nInclude your device type (iPhone/Android), app version, and steps to reproduce the issue.",
+      "scope": "in_scope",
+      "account_specific": false
+    },
+    {
+      "id": "faq_account_opening",
+      "category": "Account Management",
+      "keywords": ["open", "create", "account", "register", "sign up", "new"],
+      "question": "How do I open a VirtuBank account?",
+      "answer": "Opening a VirtuBank checking account is quick and free:\n\n**Online Process (5-10 minutes):**\n1. Visit www.virtubank.example or download the mobile app\n2. Click 'Sign Up' and enter your email\n3. Create a strong password\n4. Verify your identity:\n   - Upload a photo of your government-issued ID (passport, driver's license, national ID)\n   - Take a selfie for facial recognition\n5. Provide your personal information (name, date of birth, address)\n6. Accept the terms and conditions\n7. Submit for approval\n\n**What You'll Need:**\n- Valid government-issued ID\n- Email address\n- Phone number\n- Proof of residence (e.g., utility bill, if requested)\n\n**After Approval:**\n- Your account is activated immediately\n- You can start making transfers right away\n- Your debit card arrives within 3-5 business days\n\n**Account Requirements:**\n- Minimum age: 18 years\n- Resident of France, EU, or EEA\n- Valid email and phone number\n\n**Questions?** Contact support@virtubank.example",
+      "scope": "in_scope",
+      "account_specific": false
+    },
+    {
+      "id": "faq_account_closure",
+      "category": "Account Management",
+      "keywords": ["close", "delete", "remove", "cancel", "account", "closure"],
+      "question": "How do I close my VirtuBank account?",
+      "answer": "You can close your account anytime through the mobile app or by contacting support:\n\n**Via Mobile App (Recommended):**\n1. Open the VirtuBank app\n2. Go to Settings → Account → Close Account\n3. Select a reason for closure\n4. Review the closure terms\n5. Confirm closure\n\n**Important Before Closing:**\n- Transfer any remaining balance to another account\n- Cancel any automatic payments or subscriptions\n- Wait for pending transactions to complete\n- Check for active loans or credit products\n\n**Via Email or Phone:**\n- Email: support@virtubank.example\n- Phone: +33 (0) 800 123 456\n- Provide your account details and reason for closure\n\n**Closure Timeline:**\n- Your account is immediately flagged for closure\n- Final balance is transferred to your linked external account within 5 business days\n- Account is fully closed and archived\n\n**After Closure:**\n- You cannot access your account\n- Previous transactions are available in your archive for 7 years (required by law)\n- You can reopen an account anytime by signing up again",
+      "scope": "in_scope",
+      "account_specific": false
+    },
+    {
+      "id": "faq_fees",
+      "category": "Fees & Charges",
+      "keywords": ["fee", "charge", "cost", "price", "monthly", "annual"],
+      "question": "What are VirtuBank's fees?",
+      "answer": "VirtuBank's fee structure is transparent and competitive:\n\n**VirtuBank Checking Account:**\n- **Monthly account fee:** €0 (FREE)\n- **Transfers (domestic):** €0 (unlimited)\n- **International transfers (SWIFT):** €10 per transfer\n- **Card replacement:** Free for first replacement, €15 each subsequent\n- **Overdraft fee:** €5 per transaction (if overdraft protection enabled)\n\n**VirtuBank Savings Account:**\n- **Account fee:** €0\n- **Interest:** 2.5% APY (compounded monthly)\n- **Early withdrawal:** No penalties\n\n**VirtuBank Business Account:**\n- **Monthly account fee:** €9.99\n- **Batch transfers:** €0.50 per transaction (minimum 10 transactions)\n- **International transfers:** €15\n\n**Other Fees:**\n- **ATM cash withdrawal:** €0 at VirtuBank partner ATMs (€2 at non-partner ATMs)\n- **Wire transfer return:** €15\n- **Account research fee:** €5 (rare cases)\n\n**Fee Refund Policy:**\nIf you're charged a fee in error, contact support within 30 days for a full refund.",
+      "scope": "in_scope",
+      "account_specific": false
+    },
+    {
+      "id": "faq_fraud_protection",
+      "category": "Security & Fraud",
+      "keywords": ["fraud", "fraudulent", "suspicious", "unauthorized", "security", "protect"],
+      "question": "How does VirtuBank protect me from fraud?",
+      "answer": "VirtuBank uses multiple layers of fraud protection:\n\n**Real-Time Monitoring:**\n- 24/7 AI-powered fraud detection\n- Immediate alerts for unusual activity\n- Automatic temporary card block if suspicious patterns detected\n\n**Security Features:**\n- EMV chip on debit cards\n- Contactless payment limits (€50 per transaction)\n- Two-factor authentication (2FA) available\n- Biometric login (fingerprint/face recognition)\n\n**Dispute Process:**\nIf you notice unauthorized transactions:\n1. Log into your account and review all recent transactions\n2. Report suspicious activity via the mobile app: Help → Report Fraud\n3. Contact support: +33 (0) 800 123 456\n4. VirtuBank will investigate and typically reverse unauthorized charges within 10 business days\n\n**Liability Protection:**\n- You are NOT liable for fraudulent transactions if reported promptly\n- Card liability is limited to €50 if reported within 2 days\n- Full protection if reported within 60 days\n- Zero liability for online fraud\n\n**Your Responsibilities:**\n- Never share your password or PIN\n- Don't respond to phishing emails (VirtuBank never asks for passwords)\n- Keep your phone and app up to date\n- Report lost/stolen cards immediately\n\n**Questions?** Contact our fraud team: fraud@virtubank.example",
+      "scope": "in_scope",
+      "account_specific": false
+    },
+    {
+      "id": "faq_interest_savings",
+      "category": "Savings & Interest",
+      "keywords": ["interest", "savings", "rate", "earn", "return", "apy"],
+      "question": "What interest rate does VirtuBank offer on savings accounts?",
+      "answer": "VirtuBank's competitive interest rates:\n\n**VirtuBank Savings Account:**\n- **Annual Percentage Yield (APY):** 2.5%\n- **Compounding:** Monthly (credited on the 1st of each month)\n- **Minimum balance:** €0 (no minimum)\n- **Withdrawal penalties:** None\n\n**Interest Calculation Example:**\nIf you have €10,000 in your savings account:\n- Monthly interest: ~€20.83\n- Annual interest: €250 (after one year)\n\n**VirtuBank Fixed Deposit Rates:**\n- **3-month term:** 3% APY\n- **6-month term:** 3.5% APY\n- **12-month term:** 4% APY\n- **24-month term:** 4.5% APY\n\n**Key Points:**\n- Interest is guaranteed for the entire term\n- Early withdrawal available without penalties (interest adjusted proportionally)\n- Deposits up to €100,000 are protected\n- Rates are subject to change with market conditions\n\n**Automated Savings Tools:**\n- Round-up feature: Card purchases are rounded up, difference saved\n- Scheduled transfers: Automatic monthly deposits\n- Goal tracking: Create savings goals with progress monitoring\n\n**Current Rates:** Rates listed above are as of June 2026 and are subject to change.",
+      "scope": "in_scope",
+      "account_specific": false
+    },
+    {
+      "id": "faq_overdraft",
+      "category": "Account Features",
+      "keywords": ["overdraft", "overdraw", "negative", "balance", "protection"],
+      "question": "Does VirtuBank offer overdraft protection?",
+      "answer": "Yes, VirtuBank offers optional overdraft protection:\n\n**Overdraft Protection Options:**\n\n**1. Overdraft Courtesy (€100 limit):**\n- Free to enable\n- Allows up to €100 negative balance\n- Fee: €5 per transaction when overdrawn\n- Automatic repayment from next deposit\n- Not recommended for regular use\n\n**2. Linked Account Overdraft:**\n- Link a VirtuBank savings account or external account\n- Funds automatically transferred when balance is insufficient\n- Fee: €0 (free)\n- Requires manual setup in mobile app\n\n**3. Overdraft Line of Credit:**\n- Up to €500 credit line (subject to approval)\n- Interest rate: 9.99% APR\n- Monthly minimum payment required\n- Requires application (typically approved within 24 hours)\n\n**To Enable Overdraft Protection:**\n1. Open the VirtuBank app\n2. Go to Settings → Overdraft Protection\n3. Choose your preferred option\n4. Follow the setup steps\n\n**Important Notes:**\n- Overdraft is intended for emergencies, not regular use\n- Recurring overdrafts may result in account restrictions\n- Unauthorized overdrafts result in declined transactions instead\n- Fees are charged at the end of each business day\n\n**Questions?** Contact support@virtubank.example",
+      "scope": "in_scope",
+      "account_specific": false
+    },
+    {
+      "id": "faq_card_activation",
+      "category": "Card Management",
+      "keywords": ["activate", "activation", "card", "new", "enable", "use"],
+      "question": "How do I activate my new VirtuBank debit card?",
+      "answer": "Activating your debit card is quick and easy:\n\n**Via Mobile App (Recommended):**\n1. Open the VirtuBank app\n2. Go to Cards\n3. Find your new card (marked as 'Inactive')\n4. Tap 'Activate Card'\n5. You'll see a 3-digit CVV verification prompt\n6. Verify the CVV matches the back of your card\n7. Confirm activation\n\n**Your card is now active!** You can use it immediately for:\n- Online purchases\n- In-store transactions (contactless or chip)\n- ATM withdrawals\n- International payments\n\n**Card Details:**\n- Your card is automatically linked to your checking account\n- PIN is required for ATM withdrawals and in-store PIN transactions\n- Contactless payment limit: €50 per transaction\n- Daily withdrawal limit: €2,500\n\n**First Use Tips:**\n- Make a small test transaction to confirm everything works\n- Set up transaction alerts in Settings → Notifications\n- Memorize your PIN (never write it down)\n- Check your first statement for any discrepancies\n\n**Issues Activating?**\nIf you can't find the activation option, the card may already be active. Try using it. If it's still declined, contact support@virtubank.example",
+      "scope": "in_scope",
+      "account_specific": false
+    },
+    {
+      "id": "faq_dispute_chargeback",
+      "category": "Transactions & Disputes",
+      "keywords": ["dispute", "chargeback", "wrong", "unauthorized", "claim", "refund"],
+      "question": "How do I dispute a transaction or file a chargeback?",
+      "answer": "If you notice an incorrect or unauthorized transaction:\n\n**Dispute Process:**\n\n**Step 1: Report the Issue (Within 60 Days)**\n- Open VirtuBank app → Recent transactions\n- Find the disputed transaction\n- Tap '...' → 'Report Problem'\n- Select reason: Unauthorized, Duplicate, Wrong Amount, Merchant Error, etc.\n- Provide details and supporting documentation\n\n**Step 2: Initial Review (2-5 Business Days)**\n- VirtuBank's team reviews your claim\n- We contact the merchant for information\n- Preliminary decision is sent to you\n\n**Step 3: Resolution (5-10 Business Days)**\n- If approved, the amount is credited back to your account\n- If denied, you receive a detailed explanation\n- You can appeal within 30 days with new evidence\n\n**Dispute Types:**\n- **Unauthorized transaction:** You didn't make or authorize the purchase\n- **Duplicate charge:** You were charged twice for one transaction\n- **Incorrect amount:** The merchant charged more than agreed\n- **Merchant error:** The merchant made a mistake\n- **Quality issues:** You received defective or different goods\n\n**What to Provide:**\n- Order confirmation or receipt\n- Communication with the merchant\n- Photos (if applicable)\n- Proof of delivery (for online purchases)\n\n**Important Deadlines:**\n- Report within 60 days of the transaction\n- Provide supporting documents within 14 days of filing\n- Appeal within 30 days if initial decision unfavorable\n\n**Success Rate:**\nVirtuBank successfully resolves 85% of disputes within 10 business days.",
+      "scope": "in_scope",
+      "account_specific": false
+    },
+    {
+      "id": "faq_international_transfer",
+      "category": "Transfers & Payments",
+      "keywords": ["international", "transfer", "abroad", "country", "swift", "iban"],
+      "question": "How do I send money internationally from VirtuBank?",
+      "answer": "Sending money internationally is straightforward with VirtuBank:\n\n**International Transfer Steps:**\n\n1. **Prepare Recipient Info:**\n   - Full name (as registered with their bank)\n   - Country and bank name\n   - IBAN (International Bank Account Number)\n   - SWIFT/BIC code (if required)\n\n2. **Initiate Transfer:**\n   - Open VirtuBank app → Transfers → Send Money\n   - Select 'International Transfer'\n   - Choose destination country\n   - Enter recipient IBAN\n   - Verify IBAN format\n\n3. **Enter Amount and Confirm:**\n   - Specify amount to send\n   - Review exchange rate and fees\n   - Confirm sender and recipient details\n   - Approve the transfer\n\n**International Transfer Fees:**\n- **Outgoing transfer:** €10 (to EU/EEA countries), €20 (other countries)\n- **Currency conversion:** Mid-market rate + 1.5% spread\n- **Incoming transfer:** Variable (depends on sender's bank)\n\n**Processing Times:**\n- **EU/EEA countries (SEPA):** 1-3 business days\n- **Other countries:** 3-7 business days\n- Weekend/holiday delays possible\n\n**Limits:**\n- Daily limit: €10,000\n- Monthly limit: €100,000\n- Higher limits available upon request (contact support)\n\n**Safety Tips:**\n- Always verify IBAN before sending (one digit wrong = failed transfer)\n- Don't send money as 'gift' to avoid customs issues\n- Keep transfer confirmation for your records\n- Inform recipient of expected arrival date\n\n**Questions?** Contact support@virtubank.example",
+      "scope": "in_scope",
+      "account_specific": false
+    }
+  ],
+  "scope": {
+    "in_scope": [
+      "Card management (lost, stolen, activation, replacement)",
+      "Password security and account access",
+      "Transfer limits and international transfers",
+      "Card declines and payment issues",
+      "Mobile app troubleshooting",
+      "Account opening and closure",
+      "Fees and charges",
+      "Fraud protection and dispute process",
+      "Interest rates and savings products",
+      "Overdraft protection",
+      "General product features and benefits"
+    ],
+    "out_of_scope": [
+      "Account-specific data (balance, transactions, account number)",
+      "Personal customer account details",
+      "Investment advice or tax planning",
+      "External/third-party financial topics",
+      "Personal financial information beyond VirtuBank products"
+    ]
+  },
+  "rejection_messages": {
+    "account_specific": "I appreciate your question, but I cannot access or discuss your personal account information, including your balance, account number, or transaction history. For these details, please:\n\n1. **Check the mobile app:** Open VirtuBank → Dashboard to view your balance and recent transactions\n2. **Check the web portal:** Log into www.virtubank.example\n3. **Contact support:** +33 (0) 800 123 456 or support@virtubank.example\n\nOur support team can securely verify your identity and provide your account information.",
+    "out_of_scope": "That's an interesting question, but it's outside of what I can help with as a VirtuBank support assistant. I'm specialized in questions about VirtuBank products, features, and policies.\n\n**What I can help with:**\n- Account features and benefits\n- How to use VirtuBank products\n- Fees, limits, and policies\n- Technical support for our mobile app\n- General banking information\n\n**For other topics,** please contact our support team: +33 (0) 800 123 456 or support@virtubank.example\n\nIs there anything else about VirtuBank I can assist you with?",
+    "no_match": "I'm not entirely sure how to help with that specific question based on my VirtuBank knowledge base. However, our support team can definitely assist you!\n\n**Contact VirtuBank Support:**\n- **Phone:** +33 (0) 800 123 456 (Monday-Friday, 08:00-18:00 CET)\n- **Email:** support@virtubank.example\n- **Mobile app:** Help → Contact Support\n- **Live chat:** Available in the mobile app (business hours)\n\nOur team typically responds to emails within 24 hours. For urgent issues, please call us.\n\nIn the meantime, is there anything else about VirtuBank I can help clarify?",
+    "fallback": "I apologize, but I'm unable to fully answer that question right now. To ensure you get accurate, personalized assistance, please reach out to our support team:\n\n- **Phone:** +33 (0) 800 123 456\n- **Email:** support@virtubank.example\n- **Hours:** Monday-Friday, 08:00-18:00 CET\n\nThey'll be happy to help! Is there anything else I can assist you with?"
+  },
+  "system_instructions": {
+    "retrieval_strategy": "keyword_matching_with_fuzzy_scoring",
+    "min_score_threshold": 0.5,
+    "max_results": 3,
+    "fallback_strategy": "escalate_to_human_support",
+    "response_tone": "professional, helpful, empathetic",
+    "constraint_enforcement": "strict - no graceful fallback to generic LLM responses",
+    "account_data_access": "none - support agent cannot access or discuss personal account data"
+  }
+}
